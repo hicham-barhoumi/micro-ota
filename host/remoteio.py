@@ -187,51 +187,89 @@ def _parse_kwargs(tokens):
     return kwargs
 
 
+def _friendly(exc, host, port):
+    """Map connection exceptions to clear one-liners."""
+    import errno as _errno
+    msg = str(exc)
+    eno = getattr(exc, 'errno', None)
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return ('Timed out connecting to {}:{}.\n'
+                '  Is the device on WiFi and is RemoteIO running?').format(host, port)
+    if isinstance(exc, ConnectionRefusedError) or eno == _errno.ECONNREFUSED:
+        return ('Connection refused at {}:{}.\n'
+                '  RemoteIO server may not have started — wait a few seconds and retry.').format(host, port)
+    if eno in (_errno.ENETUNREACH, _errno.EHOSTUNREACH):
+        return 'Network unreachable. Check device IP and WiFi.'
+    if isinstance(exc, TimeoutError):
+        return 'RPC call timed out. Device may be busy.'
+    return None
+
+
 def main():
-    args = sys.argv[1:]
-    if not args:
+    argv = sys.argv[1:]
+
+    # Parse -v / --verbose before the subcommand
+    verbose = '-v' in argv or '--verbose' in argv
+    argv = [a for a in argv if a not in ('-v', '--verbose')]
+
+    if not argv:
         print('Usage:')
-        print('  python3 host/remoteio.py listen [host [port]]')
-        print('  python3 host/remoteio.py call <name> [key=val ...] [host [port]]')
+        print('  python3 host/remoteio.py [-v] listen [host [port]]')
+        print('  python3 host/remoteio.py [-v] call <name> [key=val ...] [host [port]]')
         sys.exit(1)
 
     host, port = _load_config()
-    cmd = args[0]
+    cmd = argv[0]
 
-    if cmd == 'listen':
-        remaining = args[1:]
-        if remaining and not remaining[0].startswith('-'):
-            host = remaining.pop(0)
-        if remaining:
-            port = int(remaining.pop(0))
-        print('Connecting to %s:%d …' % (host, port))
-        with RemoteIOClient(host, port) as rio:
-            print('Connected. Streaming device output (Ctrl-C to stop).\n')
-            rio.listen()
+    try:
+        if cmd == 'listen':
+            remaining = argv[1:]
+            if remaining and not remaining[0].startswith('-'):
+                host = remaining.pop(0)
+            if remaining:
+                port = int(remaining.pop(0))
+            print('Connecting to %s:%d …' % (host, port))
+            with RemoteIOClient(host, port) as rio:
+                print('Connected. Streaming device output (Ctrl-C to stop).\n')
+                rio.listen()
 
-    elif cmd == 'call':
-        if len(args) < 2:
-            print('call requires a handler name')
+        elif cmd == 'call':
+            if len(argv) < 2:
+                print('call requires a handler name')
+                sys.exit(1)
+            name   = argv[1]
+            tokens = argv[2:]
+            remaining = []
+            for tok in tokens:
+                if '=' not in tok and not tok.lstrip('-').isdigit():
+                    host = tok
+                elif tok.isdigit():
+                    port = int(tok)
+                else:
+                    remaining.append(tok)
+            kwargs = _parse_kwargs(remaining)
+            with RemoteIOClient(host, port) as rio:
+                result = rio.call(name, **kwargs)
+            print(json.dumps(result, indent=2))
+
+        else:
+            print('Unknown command: %s  (try listen or call)' % cmd)
             sys.exit(1)
-        name   = args[1]
-        tokens = args[2:]
-        # Last one or two positional tokens override host/port if they look like them
-        remaining = []
-        for tok in tokens:
-            if '=' not in tok and not tok.lstrip('-').isdigit():
-                # Could be a host name; consume it
-                host = tok
-            elif tok.isdigit():
-                port = int(tok)
-            else:
-                remaining.append(tok)
-        kwargs = _parse_kwargs(remaining)
-        with RemoteIOClient(host, port) as rio:
-            result = rio.call(name, **kwargs)
-        print(json.dumps(result, indent=2))
 
-    else:
-        print('Unknown command: %s  (try listen or call)' % cmd)
+    except KeyboardInterrupt:
+        print('\nInterrupted.', file=sys.stderr)
+        sys.exit(130)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        if verbose:
+            raise
+        friendly = _friendly(exc, host, port)
+        if friendly:
+            print('ERROR:', friendly, file=sys.stderr)
+        else:
+            print('ERROR:', exc, file=sys.stderr)
+            print('       Run with -v for the full traceback.', file=sys.stderr)
         sys.exit(1)
 
 

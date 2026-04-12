@@ -14,6 +14,7 @@ All connection params default to values in ota.json when not specified.
 """
 
 import argparse
+import errno
 import json
 import os
 import sys
@@ -29,6 +30,90 @@ if _ROOT not in sys.path:
 from host.manifest import build as build_manifest, to_json as manifest_to_json
 from host.transports.wifi_tcp import WiFiTCPTransport
 from host.transports.serial import SerialOTATransport
+
+
+# ── error handling ────────────────────────────────────────────────────────────
+
+def _friendly(exc, cfg=None):
+    """
+    Map a low-level exception to a one-line human-readable message.
+    Returns None for genuinely unexpected errors so the caller can fall back
+    to printing the raw exception text.
+    """
+    msg = str(exc)
+    eno = getattr(exc, 'errno', None)
+
+    # Serial-specific errors (import lazily; pyserial may not be installed)
+    try:
+        import serial
+        if isinstance(exc, serial.SerialException):
+            if 'No such file' in msg or 'cannot find' in msg.lower():
+                port = msg.split("'")[1] if "'" in msg else msg
+                return ("Serial port not found: {}\n"
+                        "  Check the USB cable or set serialPort in ota.json.").format(port)
+            if 'Permission denied' in msg or 'Access is denied' in msg:
+                port = msg.split("'")[1] if "'" in msg else '(port)'
+                return ("Permission denied on {}.\n"
+                        "  Run: sudo usermod -aG dialout $USER  then log out and back in.\n"
+                        "  Or prefix your command with: sg dialout -c \"...\"").format(port)
+            return 'Serial error: ' + msg
+    except ImportError:
+        pass
+
+    # Network timeouts
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        host = cfg.get('hostname', '?') if cfg else '?'
+        port = cfg.get('port', 2018) if cfg else '?'
+        return ("Timed out connecting to {}:{}.\n"
+                "  Is the device on WiFi and is the OTA server running?").format(host, port)
+
+    # Connection refused (device reachable but port not listening)
+    if isinstance(exc, ConnectionRefusedError) or eno == errno.ECONNREFUSED:
+        host = cfg.get('hostname', '?') if cfg else '?'
+        port = cfg.get('port', 2018) if cfg else '?'
+        return ("Connection refused at {}:{}.\n"
+                "  The OTA server may not have started yet — wait a few seconds and retry.\n"
+                "  Or run: uota terminal  to check device state.").format(host, port)
+
+    # Host unreachable / no route
+    if eno in (errno.ENETUNREACH, errno.EHOSTUNREACH, errno.ENETDOWN):
+        return ("Network unreachable. Check that the host and device are on the same network\n"
+                "  and that hostname/IP in ota.json is correct.")
+
+    if isinstance(exc, OSError):
+        # Serial port vanished mid-transfer
+        if eno == errno.EIO:
+            return 'I/O error on serial port. Device disconnected during transfer?'
+        if eno == errno.ENOENT:
+            return 'Device or file not found: ' + msg
+        if 'connection closed' in msg.lower():
+            return ('Device closed the connection unexpectedly.\n'
+                    '  It may have reset mid-transfer — check the serial console.')
+
+    if isinstance(exc, RuntimeError):
+        # Raw REPL entry failures
+        if 'raw REPL' in msg:
+            return ("Could not enter MicroPython raw REPL.\n"
+                    "  Press the Reset button on the device and retry.\n"
+                    "  Detail: " + msg)
+        # Inline OTA server injection
+        if 'Inline OTA' in msg or 'failed to start' in msg.lower():
+            return ("Serial OTA server injection failed.\n"
+                    "  Reset the device and retry: uota fast --transport serial\n"
+                    "  Detail: " + msg)
+        # Device protocol disagreements
+        if 'not ready' in msg or 'ready' in msg:
+            return 'Device rejected OTA session: ' + msg
+        if 'No OTA transport' in msg:
+            return ("No transport configured.\n"
+                    "  Set 'transports' in ota.json (e.g. [\"wifi_tcp\"] or [\"serial\"]).")
+        # esptool / firmware errors bubble through RuntimeError too
+        return 'Error: ' + msg
+
+    if isinstance(exc, FileNotFoundError):
+        return 'File not found: ' + msg
+
+    return None   # unexpected — caller will show raw exc + verbose hint
 
 
 # ── config ────────────────────────────────────────────────────────────────────
@@ -255,6 +340,8 @@ def main():
         description='micro-ota host tool',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    p.add_argument('-v', '--verbose', action='store_true',
+                   help='Show full traceback on errors')
     sub = p.add_subparsers(dest='command', required=True)
 
     # bootstrap
@@ -315,7 +402,7 @@ def main():
     args = p.parse_args()
     cfg  = load_config()
 
-    {
+    dispatch = {
         'bootstrap': cmd_bootstrap,
         'fast':      cmd_fast,
         'full':      cmd_full,
@@ -324,7 +411,32 @@ def main():
         'flash':     cmd_flash,
         'serve':     cmd_serve,
         'bundle':    cmd_bundle,
-    }[args.command](args, cfg)
+    }
+
+    try:
+        dispatch[args.command](args, cfg)
+    except KeyboardInterrupt:
+        print('\nInterrupted.', file=sys.stderr)
+        sys.exit(130)
+    except SystemExit:
+        raise   # already handled (e.g. argparse, explicit sys.exit)
+    except Exception as exc:
+        if args.verbose:
+            raise
+        # Build an effective config that reflects the actual host/port used
+        # (args overrides take precedence over ota.json values)
+        eff = dict(cfg)
+        if getattr(args, 'host', None):
+            eff['hostname'] = args.host
+        if getattr(args, 'port', None):
+            eff['port'] = args.port
+        friendly = _friendly(exc, eff)
+        if friendly:
+            print('ERROR:', friendly, file=sys.stderr)
+        else:
+            print('ERROR:', exc, file=sys.stderr)
+            print('       Run with -v for the full traceback.', file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == '__main__':
