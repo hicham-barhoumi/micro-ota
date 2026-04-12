@@ -30,7 +30,7 @@ import _thread
 _STAGE   = '/ota_stage'
 _MANIFEST = '/ota_manifest.json'
 _VERSION  = '/ota_version.json'
-_PROTECTED = frozenset(['ota.py', 'boot_guard.py', 'boot.py', 'transports', 'ota.json', 'ota_manifest.json', 'ota_version.json', 'ota_boot_state.json'])
+_PROTECTED = frozenset(['ota.py', 'boot_guard.py', 'boot.py', 'remoteio.py', 'transports', 'ota.json', 'ota_manifest.json', 'ota_version.json', 'ota_boot_state.json'])
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

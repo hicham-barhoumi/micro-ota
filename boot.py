@@ -14,8 +14,16 @@ def _ota():
     except Exception as _e:
         print('[OTA] Failed to start:', _e)
 
-_thread.start_new_thread(_ota, ())
+def _remoteio():
+    try:
+        import remoteio
+        remoteio.run()
+    except Exception as _e:
+        print('[RemoteIO] Failed to start:', _e)
 
-# Give the OTA thread time to connect WiFi before main.py starts
+_thread.start_new_thread(_ota, ())
+_thread.start_new_thread(_remoteio, ())
+
+# Give the OTA/RemoteIO threads time to connect WiFi before main.py starts
 import time
-time.sleep(1)
+time.sleep(6)

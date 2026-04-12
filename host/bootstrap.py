@@ -17,6 +17,7 @@ import sys
 _DEVICE_FILES = [
     ('device/ota.py',                     '/ota.py'),
     ('device/boot_guard.py',              '/boot_guard.py'),
+    ('device/remoteio.py',               '/remoteio.py'),
     ('device/transports/__init__.py',     '/transports/__init__.py'),
     ('device/transports/wifi_tcp.py',     '/transports/wifi_tcp.py'),
     ('ota.json',                          '/ota.json'),
@@ -39,9 +40,17 @@ def _ota():
     except Exception as _e:
         print('[OTA] Failed to start:', _e)
 
-_thread.start_new_thread(_ota, ())
+def _remoteio():
+    try:
+        import remoteio
+        remoteio.run()
+    except Exception as _e:
+        print('[RemoteIO] Failed to start:', _e)
 
-# Give the OTA thread time to connect WiFi before main.py starts
+_thread.start_new_thread(_ota, ())
+_thread.start_new_thread(_remoteio, ())
+
+# Give the OTA/RemoteIO threads time to connect WiFi before main.py starts
 import time
 time.sleep(6)
 '''
