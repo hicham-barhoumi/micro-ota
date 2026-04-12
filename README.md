@@ -32,15 +32,19 @@ Both OTA and RemoteIO can also run over **USB serial** via raw REPL injection �
 micro-ota/
 ├── device/                   # Code that runs on the ESP32
 │   ├── ota.py                # OTA server (protocol, staging, commit)
-│   ├── boot_guard.py         # Crash counter, rollback hook
+│   ├── boot_guard.py         # Crash counter + esp32.Partition rollback
 │   ├── remoteio.py           # RemoteIO side-channel server
 │   └── transports/
-│       └── wifi_tcp.py       # WiFi connect + TCP server
+│       ├── wifi_tcp.py       # WiFi connect + TCP server
+│       └── http_pull.py      # HTTP pull transport (polls manifest URL)
 │
 ├── host/                     # Code that runs on the PC
 │   ├── uota.py               # OTA CLI entry point
 │   ├── remoteio.py           # RemoteIO client + CLI
+│   ├── firmware.py           # Firmware flash via esptool
 │   ├── manifest.py           # SHA-256 manifest builder
+│   ├── serve.py              # HTTP file server for http_pull
+│   ├── bundle.py             # Self-contained release builder
 │   ├── bootstrap.py          # First-time serial uploader
 │   └── transports/
 │       ├── wifi_tcp.py       # TCP client transport
@@ -126,6 +130,8 @@ python3 host/uota.py <command> [options]
 | `version` | Read the current version string from the device |
 | `terminal` | Interactive OTA command shell |
 | `flash` | Flash MicroPython firmware via esptool |
+| `serve` | HTTP file server for the `http_pull` transport |
+| `bundle` | Create a self-contained release bundle (`dist/` + optional ZIP) |
 
 ### Transport options
 
@@ -345,16 +351,45 @@ Serial port is auto-detected from connected ESP32 devices; override with `--seri
 
 ---
 
+## Firmware flash
+
+`uota flash` wraps esptool to flash a MicroPython `.bin` firmware file.
+
+```bash
+# Basic flash (auto-detects port and chip)
+python3 host/uota.py flash esp32-20240602-v1.23.0.bin
+
+# Explicit options
+python3 host/uota.py flash firmware.bin \
+    --port /dev/ttyUSB0 \
+    --baud 460800 \
+    --chip esp32 \
+    --erase          # full chip erase before flashing (clean slate)
+```
+
+Flash addresses are set automatically per chip family:
+- **ESP32**: `0x1000`
+- **ESP32-S2/S3, C3, C6, H2**: `0x0`
+
+After flashing, run `uota bootstrap` to re-upload the OTA library.
+
+---
+
 ## Boot guard
 
 `boot_guard.py` tracks consecutive unclean boots. On every boot it increments a crash counter in `/ota_boot_state.json`. The OTA server calls `mark_clean()` once running, which resets the counter.
 
-If the device crashes 3 times before `mark_clean()` is called, a warning is printed on the serial console. A future phase will trigger automatic firmware rollback via `esp32.Partition`.
+**Firmware rollback** — on 3 consecutive crashes:
+1. A warning is printed on the serial console.
+2. On standard MicroPython ESP32 builds, `esp32.Partition` is used to switch to the previous firmware partition and reboot — automatically recovering a crash-looping firmware update.
 
-To recover a crash-looping device, re-bootstrap via USB:
+`mark_clean()` also calls `esp32.Partition.mark_app_valid_cancel_rollback()` to confirm the current firmware is stable.
+
+To recover a device that cannot self-recover:
 
 ```bash
-python3 host/uota.py bootstrap
+python3 host/uota.py bootstrap   # re-upload OTA library via USB
+python3 host/uota.py flash firmware.bin  # or reflash firmware
 ```
 
 ---
@@ -399,10 +434,12 @@ time.sleep(2)   # let OTA + RemoteIO connect to WiFi
 ## Tests
 
 ```bash
-# Unit tests (no hardware required)
-python3 tests/test_manifest.py
-python3 tests/test_protocol.py
-python3 tests/test_serial_transport.py
+# Unit tests (no hardware required) — 58 tests total
+python3 tests/test_manifest.py          # manifest builder (9)
+python3 tests/test_protocol.py          # OTA protocol mock (9)
+python3 tests/test_serial_transport.py  # serial transport mock (11)
+python3 tests/test_http_pull.py         # HTTP pull + bundle + serve (15)
+python3 tests/test_firmware.py          # firmware flash + boot_guard (14)
 
 # Hardware-in-the-loop tests (ESP32 on /dev/ttyUSB0)
 sg dialout -c "SKIP_WIFI=1 python3 tests/test_hardware.py"   # serial only
@@ -430,7 +467,5 @@ Tasks configured in `.vscode/tasks.json`:
 
 ## Roadmap
 
-- **Phase 4** — HTTP pull transport, ZIP bundle support
-- **Phase 5** — Firmware OTA via `esp32.Partition`, automatic rollback
-- **Phase 6** — BLE transport (Nordic UART Service)
-- **Phase 7** — HMAC-SHA256 manifest signing
+- **Phase 6** — BLE transport (Nordic UART Service, bleak on host)
+- **Phase 7** — HMAC-SHA256 manifest signing (shared key in ota.json)
