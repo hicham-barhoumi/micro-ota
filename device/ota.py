@@ -316,24 +316,38 @@ class OTAUpdater:
         except OSError:
             return {}
 
-    def _make_transport(self):
+    def _make_transports(self):
+        """Return a list of all configured transports that can be instantiated."""
         cfg = self._config
+        result = []
         for name in cfg.get('transports', ['wifi_tcp']):
             try:
                 if name == 'wifi_tcp':
                     from transports.wifi_tcp import WiFiTCPTransport
-                    return WiFiTCPTransport(
+                    result.append(WiFiTCPTransport(
                         ssid=cfg.get('ssid', ''),
                         password=cfg.get('password', ''),
                         hostname=cfg.get('hostname', 'micropython'),
                         port=cfg.get('port', 2018),
-                    )
+                    ))
+                elif name == 'serial':
+                    from transports.serial import SerialTransport
+                    result.append(SerialTransport(
+                        uart_id=cfg.get('serialUartId', 1),
+                        baud=cfg.get('serialBaud', 115200),
+                        tx=cfg.get('serialTx', 10),
+                        rx=cfg.get('serialRx', 9),
+                    ))
+                else:
+                    print('[OTA] Unknown transport:', name)
             except Exception as e:
                 print('[OTA] Transport', name, 'unavailable:', e)
-        raise RuntimeError('No OTA transport available')
+        if not result:
+            raise RuntimeError('No OTA transport available')
+        return result
 
-    def run(self):
-        transport = self._make_transport()
+    def _run_transport(self, transport):
+        """Serve one transport forever, restarting on errors."""
         while True:
             try:
                 transport.start()
@@ -355,6 +369,14 @@ class OTAUpdater:
                 except Exception:
                     pass
                 time.sleep(3)
+
+    def run(self):
+        """Start all configured transports. Each runs in its own thread."""
+        transports = self._make_transports()
+        # Spawn a thread for every transport except the last, which runs here.
+        for t in transports[:-1]:
+            _thread.start_new_thread(self._run_transport, (t,))
+        self._run_transport(transports[-1])
 
     def run_background(self):
         _thread.start_new_thread(self.run, ())

@@ -1,7 +1,11 @@
 """
-Raw MicroPython REPL transport.
-Used exclusively for bootstrap (first-time upload of OTA lib).
-Implements just enough of the raw REPL protocol to write files.
+Serial transports for micro-ota host.
+
+RawREPL         — raw REPL file uploader, used by bootstrap only.
+SerialOTATransport — OTA over USB/UART0 via raw REPL injection.
+                   Enters raw REPL, injects an inline OTA server on the
+                   device, then speaks the standard micro-ota protocol
+                   directly over the serial port. No extra wiring needed.
 """
 
 import base64
@@ -174,6 +178,132 @@ class RawREPL:
 
     def __enter__(self):
         self.open()
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+
+# ── SerialOTATransport ────────────────────────────────────────────────────────
+
+# Minimal inline OTA server injected into the device via raw REPL.
+# Reads OTA protocol commands from sys.stdin and writes responses to
+# sys.stdout, which in raw REPL mode are the raw UART bytes.
+# latin-1 encoding is used for binary transparency (0x00-0xFF ↔ 1 byte).
+_INLINE_SERVER = (
+    'import sys as _s\n'
+    'class _C:\n'
+    ' def recv(self,n):\n'
+    '  b=b""\n'
+    '  while len(b)<n:\n'
+    '   c=_s.stdin.read(1)\n'
+    '   b+=c.encode("latin-1") if isinstance(c,str) else c\n'
+    '  return b\n'
+    ' def sendall(self,d):\n'
+    '  _s.stdout.write(d.decode("latin-1") if isinstance(d,bytes) else d)\n'
+    ' def close(self):pass\n'
+    'from ota import _handle as _h\n'
+    'while True:_h(_C())\n'
+)
+
+
+class SerialOTATransport:
+    """
+    OTA transport over USB serial (UART0) using raw REPL injection.
+
+    Usage is identical to WiFiTCPTransport — connect() / read_line() /
+    write_line() / read_exact() / write() / close().
+
+    connect() enters raw REPL, executes the inline OTA server on the
+    device, and verifies readiness. After that the caller speaks the
+    normal micro-ota protocol over the serial port.
+
+    close() sends Ctrl-C + Ctrl-B to restore the interactive REPL.
+    """
+
+    def __init__(self, port, baud=115200, timeout=10):
+        self.port    = port
+        self.baud    = baud
+        self.timeout = timeout
+        self._ser    = None
+
+    # ── connection ────────────────────────────────────────────────────────────
+
+    def connect(self):
+        self._ser = serial.Serial(self.port, self.baud, timeout=self.timeout)
+        time.sleep(0.5)
+
+        # Interrupt any running code and flush
+        self._ser.write(b'\r\x03\x03')
+        self._ser.flush()
+        time.sleep(0.3)
+        self._ser.reset_input_buffer()
+
+        # Enter raw REPL
+        self._ser.write(b'\x01')
+        self._ser.flush()
+        time.sleep(0.2)
+        banner = self._ser.read(200)
+        if b'raw REPL' not in banner:
+            raise RuntimeError(
+                'Could not enter raw REPL. Got: ' + repr(banner) +
+                '\nCheck port/baud or press Reset on the device.'
+            )
+
+        # Inject inline OTA server
+        self._ser.write(_INLINE_SERVER.encode())
+        self._ser.write(b'\x04')   # Ctrl+D: execute
+        self._ser.flush()
+
+        # Raw REPL replies 'OK' when code starts executing
+        header = self._ser.read(2)
+        if header != b'OK':
+            raise RuntimeError(
+                'Inline OTA server failed to start. Got: ' + repr(header)
+            )
+
+    def close(self):
+        if self._ser and self._ser.is_open:
+            try:
+                # Ctrl-C interrupts the running loop; Ctrl-B exits raw REPL
+                self._ser.write(b'\x03\x02')
+                self._ser.flush()
+            except Exception:
+                pass
+            self._ser.close()
+        self._ser = None
+
+    # ── protocol primitives ───────────────────────────────────────────────────
+
+    def read_line(self):
+        buf = bytearray()
+        while True:
+            c = self._ser.read(1)
+            if not c or c == b'\n':
+                return buf.decode()
+            if c != b'\r':
+                buf.extend(c)
+
+    def read_exact(self, n):
+        buf = bytearray()
+        while len(buf) < n:
+            chunk = self._ser.read(min(4096, n - len(buf)))
+            if not chunk:
+                raise OSError('serial connection closed')
+            buf.extend(chunk)
+        return bytes(buf)
+
+    def write(self, data):
+        if isinstance(data, str):
+            data = data.encode()
+        self._ser.write(data)
+
+    def write_line(self, line):
+        self.write(line if line.endswith('\n') else line + '\n')
+
+    def __enter__(self):
+        if not (self._ser and self._ser.is_open):
+            self.connect()
         return self
 
     def __exit__(self, *_):

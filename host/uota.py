@@ -28,6 +28,7 @@ if _ROOT not in sys.path:
 
 from host.manifest import build as build_manifest, to_json as manifest_to_json
 from host.transports.wifi_tcp import WiFiTCPTransport
+from host.transports.serial import SerialOTATransport
 
 
 # ── config ────────────────────────────────────────────────────────────────────
@@ -42,14 +43,30 @@ def load_config(path='ota.json'):
 
 # ── transport factory ─────────────────────────────────────────────────────────
 
-def get_transport(cfg, host_override=None, port_override=None):
-    host = host_override or cfg.get('hostname', 'micropython')
-    port = port_override or cfg.get('port', 2018)
+def get_transport(cfg, host_override=None, port_override=None, transport_override=None):
+    """Return the first usable host transport from config (or override)."""
+    names = [transport_override] if transport_override else cfg.get('transports', ['wifi_tcp'])
 
-    for name in cfg.get('transports', ['wifi_tcp']):
+    for name in names:
         if name == 'wifi_tcp':
+            host = host_override or cfg.get('hostname', 'micropython')
+            port = port_override or cfg.get('port', 2018)
             return WiFiTCPTransport(host, port)
+        if name == 'serial':
+            port = host_override or cfg.get('serialPort') or auto_detect_serial()
+            baud = cfg.get('serialBaud', 115200)
+            return SerialOTATransport(port, baud)
+
     raise RuntimeError('No supported transport in config')
+
+
+def auto_detect_serial():
+    from host.transports.serial import auto_detect_port
+    p = auto_detect_port()
+    if p is None:
+        print('ERROR: No serial port found. Connect the device or set serialPort in ota.json.')
+        sys.exit(1)
+    return p
 
 
 # ── OTA push ──────────────────────────────────────────────────────────────────
@@ -145,7 +162,7 @@ def cmd_fast(args, cfg):
     version   = args.version or cfg.get('version', 'unknown')
     manifest  = build_manifest(patterns, excludes, version)
     files     = {p: p for p in manifest['files']}
-    transport = get_transport(cfg, args.host, args.port)
+    transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None))
     print('Fast OTA: {} file(s)'.format(len(files)))
     send_ota(transport, files, manifest)
 
@@ -156,13 +173,13 @@ def cmd_full(args, cfg):
     version   = args.version or cfg.get('version', 'unknown')
     manifest  = build_manifest(patterns, excludes, version)
     files     = {p: p for p in manifest['files']}
-    transport = get_transport(cfg, args.host, args.port)
+    transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None))
     print('Full OTA: {} file(s){}'.format(len(files), '  [wipe first]' if args.wipe else ''))
     send_ota(transport, files, manifest, wipe=args.wipe)
 
 
 def cmd_terminal(args, cfg):
-    transport = get_transport(cfg, args.host, args.port)
+    transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None))
     print("Terminal mode. Type 'exit' to quit.")
     print("Commands: ping, version, ls [path], get <path>, rm <path>, reset, wipe")
     while True:
@@ -194,7 +211,7 @@ def cmd_terminal(args, cfg):
 
 
 def cmd_version(args, cfg):
-    transport = get_transport(cfg, args.host, args.port)
+    transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None))
     with transport:
         transport.write_line('version')
         print(transport.read_line())
@@ -226,9 +243,11 @@ def main():
 
     # fast
     fa = sub.add_parser('fast', help='Push fastOtaFiles to the device')
-    fa.add_argument('--host',    help='Device hostname or IP')
-    fa.add_argument('--port',    type=int, help='TCP port')
-    fa.add_argument('--version', help='Version string to embed in manifest')
+    fa.add_argument('--host',      help='Device hostname or IP')
+    fa.add_argument('--port',      type=int, help='TCP port (WiFi) or serial port path')
+    fa.add_argument('--version',   help='Version string to embed in manifest')
+    fa.add_argument('--transport', choices=['wifi_tcp', 'serial'],
+                    help='Force transport (default: first in ota.json transports list)')
 
     # full
     fu = sub.add_parser('full', help='Push all managed files to the device')
@@ -236,16 +255,19 @@ def main():
     fu.add_argument('--port', type=int)
     fu.add_argument('--version')
     fu.add_argument('--wipe', action='store_true', help='Wipe device before upload')
+    fu.add_argument('--transport', choices=['wifi_tcp', 'serial'])
 
     # terminal
     te = sub.add_parser('terminal', help='Interactive device terminal over WiFi')
     te.add_argument('--host')
     te.add_argument('--port', type=int)
+    te.add_argument('--transport', choices=['wifi_tcp', 'serial'])
 
     # version
     ve = sub.add_parser('version', help='Read version from device')
     ve.add_argument('--host')
     ve.add_argument('--port', type=int)
+    ve.add_argument('--transport', choices=['wifi_tcp', 'serial'])
 
     # flash  (Phase 3 stub)
     fl = sub.add_parser('flash', help='Flash MicroPython firmware (Phase 3)')
