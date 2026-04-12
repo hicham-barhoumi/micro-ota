@@ -218,12 +218,15 @@ def cmd_version(args, cfg):
 
 
 def cmd_flash(args, cfg):
-    print('Firmware flash is coming in Phase 5.')
-    print('For now, use esptool directly:')
-    print('  esptool.py --port {} write_flash 0x0 {}'.format(
-        args.port or cfg.get('serialPort', '/dev/ttyUSB0'),
-        args.firmware,
-    ))
+    from host.firmware import flash, _find_port
+    port = args.port or _find_port(cfg)
+    flash(
+        firmware_path=args.firmware,
+        port=port,
+        baud=args.baud,
+        chip=args.chip,
+        erase=args.erase,
+    )
 
 
 def cmd_serve(args, cfg):
@@ -287,11 +290,15 @@ def main():
     ve.add_argument('--port', type=int)
     ve.add_argument('--transport', choices=['wifi_tcp', 'serial'])
 
-    # flash  (Phase 5 stub)
-    fl = sub.add_parser('flash', help='Flash MicroPython firmware (Phase 5)')
+    # flash
+    fl = sub.add_parser('flash', help='Flash MicroPython firmware via esptool')
     fl.add_argument('firmware', help='Path to .bin firmware file')
-    fl.add_argument('--port')
-    fl.add_argument('--baud', type=int, default=460800)
+    fl.add_argument('--port',  default=None, help='Serial port (auto-detected if omitted)')
+    fl.add_argument('--baud',  type=int, default=460800, help='Flash baud rate (default 460800)')
+    fl.add_argument('--chip',  default='auto',
+                    help='Chip: auto (default), esp32, esp32s2, esp32s3, esp32c3')
+    fl.add_argument('--erase', action='store_true',
+                    help='Full chip erase before flashing')
 
     # serve — HTTP file server for http_pull transport
     sv = sub.add_parser('serve', help='Serve managed files over HTTP for http_pull transport')
