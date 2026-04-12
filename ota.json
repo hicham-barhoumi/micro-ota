@@ -7,6 +7,8 @@
     "password": "",
     "serialPort": "",
     "transports": ["wifi_tcp", "serial"],
+    "manifestUrl": "",
+    "pullInterval": 60,
     "managed_paths": ["*.py", "lib/**", "*.json"],
     "excludedFiles": [
         ".git/**",

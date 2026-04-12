@@ -338,6 +338,17 @@ class OTAUpdater:
                         tx=cfg.get('serialTx', 10),
                         rx=cfg.get('serialRx', 9),
                     ))
+                elif name == 'http_pull':
+                    url = cfg.get('manifestUrl', '')
+                    if not url:
+                        print('[OTA] http_pull requires manifestUrl in ota.json')
+                        continue
+                    from transports.http_pull import HttpPullTransport
+                    result.append(HttpPullTransport(
+                        manifest_url=url,
+                        interval=cfg.get('pullInterval', 60),
+                        timeout=cfg.get('pullTimeout', 15),
+                    ))
                 else:
                     print('[OTA] Unknown transport:', name)
             except Exception as e:
@@ -348,6 +359,18 @@ class OTAUpdater:
 
     def _run_transport(self, transport):
         """Serve one transport forever, restarting on errors."""
+        if getattr(transport, 'is_pull', False):
+            # Pull-mode transport: poll() on an interval instead of accept() loop
+            print('[OTA] Pull transport started, interval=%ds' % transport.interval)
+            while True:
+                try:
+                    transport.poll()
+                except Exception as e:
+                    print('[OTA] Poll error:', e)
+                time.sleep(transport.interval)
+            return
+
+        # Push-mode transport: accept incoming connections
         while True:
             try:
                 transport.start()

@@ -218,12 +218,30 @@ def cmd_version(args, cfg):
 
 
 def cmd_flash(args, cfg):
-    print('Firmware flash is coming in Phase 3.')
+    print('Firmware flash is coming in Phase 5.')
     print('For now, use esptool directly:')
     print('  esptool.py --port {} write_flash 0x0 {}'.format(
         args.port or cfg.get('serialPort', '/dev/ttyUSB0'),
         args.firmware,
     ))
+
+
+def cmd_serve(args, cfg):
+    from host.serve import serve
+    serve(
+        host=args.host,
+        port=args.port,
+        version=args.version or cfg.get('version'),
+    )
+
+
+def cmd_bundle(args, cfg):
+    from host.bundle import build
+    build(
+        out_dir=args.out,
+        make_zip=args.zip,
+        version=args.version or cfg.get('version'),
+    )
 
 
 # ── CLI entry point ───────────────────────────────────────────────────────────
@@ -269,11 +287,23 @@ def main():
     ve.add_argument('--port', type=int)
     ve.add_argument('--transport', choices=['wifi_tcp', 'serial'])
 
-    # flash  (Phase 3 stub)
-    fl = sub.add_parser('flash', help='Flash MicroPython firmware (Phase 3)')
+    # flash  (Phase 5 stub)
+    fl = sub.add_parser('flash', help='Flash MicroPython firmware (Phase 5)')
     fl.add_argument('firmware', help='Path to .bin firmware file')
     fl.add_argument('--port')
     fl.add_argument('--baud', type=int, default=460800)
+
+    # serve — HTTP file server for http_pull transport
+    sv = sub.add_parser('serve', help='Serve managed files over HTTP for http_pull transport')
+    sv.add_argument('--host',    default='0.0.0.0', help='Bind address (default 0.0.0.0)')
+    sv.add_argument('--port',    type=int, default=8080, help='TCP port (default 8080)')
+    sv.add_argument('--version', default=None, help='Version string override')
+
+    # bundle — create a self-contained release directory / ZIP
+    bu = sub.add_parser('bundle', help='Create a self-contained release bundle')
+    bu.add_argument('--out',     default='dist', help='Output directory (default dist)')
+    bu.add_argument('--zip',     action='store_true', help='Also create dist.zip')
+    bu.add_argument('--version', default=None, help='Version string override')
 
     args = p.parse_args()
     cfg  = load_config()
@@ -285,6 +315,8 @@ def main():
         'terminal':  cmd_terminal,
         'version':   cmd_version,
         'flash':     cmd_flash,
+        'serve':     cmd_serve,
+        'bundle':    cmd_bundle,
     }[args.command](args, cfg)
 
 
