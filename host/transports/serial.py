@@ -191,16 +191,26 @@ class RawREPL:
 # sys.stdout, which in raw REPL mode are the raw UART bytes.
 # latin-1 encoding is used for binary transparency (0x00-0xFF ↔ 1 byte).
 _INLINE_SERVER = (
+    # Use .buffer on stdin/stdout for raw binary access — text-mode sys.stdout
+    # translates \n → \r\n which corrupts binary file transfers.  .buffer bypasses
+    # that.  Falls back to the text stream on older MicroPython builds that lack it.
+    # Device print() still shares this UART; host filters those lines in read_line().
     'import sys as _s\n'
+    'try:\n'
+    ' _out=_s.stdout.buffer;_inp=_s.stdin.buffer\n'
+    'except AttributeError:\n'
+    ' _out=_s.stdout;_inp=_s.stdin\n'
     'class _C:\n'
     ' def recv(self,n):\n'
     '  b=b""\n'
     '  while len(b)<n:\n'
-    '   c=_s.stdin.read(1)\n'
-    '   b+=c.encode("latin-1") if isinstance(c,str) else c\n'
+    '   c=_inp.read(1)\n'
+    '   if isinstance(c,str):c=c.encode("latin-1")\n'
+    '   b+=c\n'
     '  return b\n'
     ' def sendall(self,d):\n'
-    '  _s.stdout.write(d.decode("latin-1") if isinstance(d,bytes) else d)\n'
+    '  if isinstance(d,str):d=d.encode("latin-1")\n'
+    '  _out.write(d)\n'
     ' def close(self):pass\n'
     'from ota import _handle as _h\n'
     'while True:_h(_C())\n'
@@ -276,13 +286,21 @@ class SerialOTATransport:
     # ── protocol primitives ───────────────────────────────────────────────────
 
     def read_line(self):
-        buf = bytearray()
         while True:
-            c = self._ser.read(1)
-            if not c or c == b'\n':
-                return buf.decode()
-            if c != b'\r':
-                buf.extend(c)
+            buf = bytearray()
+            while True:
+                c = self._ser.read(1)
+                if not c or c == b'\n':
+                    break
+                if c != b'\r':
+                    buf.extend(c)
+            line = buf.decode(errors='replace')
+            # Skip device debug output (e.g. "[OTA] Manifest: 1 files").
+            # sys.stdout cannot be redirected in MicroPython, so debug prints
+            # share the UART with protocol responses. All protocol responses
+            # are plain words or JSON — they never start with '['.
+            if not line.startswith('['):
+                return line
 
     def read_exact(self, n):
         buf = bytearray()

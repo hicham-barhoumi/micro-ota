@@ -18,4 +18,4 @@ _thread.start_new_thread(_ota, ())
 
 # Give the OTA thread time to connect WiFi before main.py starts
 import time
-time.sleep(6)
+time.sleep(1)
