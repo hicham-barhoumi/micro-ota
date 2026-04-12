@@ -15,11 +15,11 @@ import sys
 import tempfile
 import threading
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'packages', 'cli'))
 
-from host.transports.serial import SerialOTATransport, _INLINE_SERVER
-from host.uota import send_ota
-from host.manifest import build as build_manifest
+from uota.transports.serial import SerialOTATransport, _INLINE_SERVER
+from uota.cli import send_ota
+from uota.manifest import build as build_manifest
 
 
 # ── mock serial port ──────────────────────────────────────────────────────────
@@ -231,7 +231,7 @@ class MockOTADevice:
 
 def _run_with_mock(mock, fn):
     """Replace serial.Serial in the transport module, call fn(), restore."""
-    import host.transports.serial as mod
+    import uota.transports.serial as mod
 
     class _Fake:
         def Serial(_, port, baud, timeout=None):

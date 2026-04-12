@@ -17,12 +17,12 @@ import sys
 import tempfile
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'packages', 'cli'))
 
-from host.manifest import build as build_manifest
-from host.transports.wifi_tcp import WiFiTCPTransport
-from host.transports.serial import SerialOTATransport
-from host.uota import send_ota
+from uota.manifest import build as build_manifest
+from uota.transports.wifi_tcp import WiFiTCPTransport
+from uota.transports.serial import SerialOTATransport
+from uota.cli import send_ota
 
 # ── config ────────────────────────────────────────────────────────────────────
 

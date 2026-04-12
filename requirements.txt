@@ -1,3 +1,0 @@
-pyserial>=3.5
-esptool>=4.0
-bleak>=0.21

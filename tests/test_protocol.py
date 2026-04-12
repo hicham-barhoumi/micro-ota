@@ -12,10 +12,10 @@ import sys
 import tempfile
 import threading
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from host.manifest import build as build_manifest, to_json as manifest_to_json
-from host.transports.wifi_tcp import WiFiTCPTransport
-from host.uota import send_ota
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'packages', 'cli'))
+from uota.manifest import build as build_manifest, to_json as manifest_to_json
+from uota.transports.wifi_tcp import WiFiTCPTransport
+from uota.cli import send_ota
 
 
 # ── mock device server ────────────────────────────────────────────────────────

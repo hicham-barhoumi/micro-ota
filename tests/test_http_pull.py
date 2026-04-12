@@ -14,11 +14,10 @@ import urllib.request
 import zipfile
 import hashlib
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+_PKG = os.path.join(os.path.dirname(__file__), '..', 'packages', 'cli')
+sys.path.insert(0, _PKG)
 
-_DEVICE_HTTP_PULL = os.path.join(
-    os.path.dirname(__file__), '..', 'device', 'transports', 'http_pull.py'
-)
+_DEVICE_HTTP_PULL = os.path.join(_PKG, 'uota', '_device', 'transports', 'http_pull.py')
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -52,7 +51,7 @@ def _make_project(tmp, files, version='1.0.0', extra_cfg=None):
 def test_bundle_creates_manifest_and_files():
     with tempfile.TemporaryDirectory() as tmp:
         cfg = _make_project(tmp, {'main.py': b'x=1\n', 'lib/helper.py': b'pass\n'})
-        from host.bundle import build
+        from uota.bundle import build
         manifest = build(out_dir='dist', cfg_path=cfg)
         assert os.path.isfile(os.path.join(tmp, 'dist', 'manifest.json'))
         assert os.path.isfile(os.path.join(tmp, 'dist', 'main.py'))
@@ -65,7 +64,7 @@ def test_bundle_creates_manifest_and_files():
 def test_bundle_version_override():
     with tempfile.TemporaryDirectory() as tmp:
         cfg = _make_project(tmp, {'main.py': b'x=1\n'}, version='1.0.0')
-        from host.bundle import build
+        from uota.bundle import build
         manifest = build(out_dir='dist', version='9.9.9', cfg_path=cfg)
         assert manifest['version'] == '9.9.9'
         with open(os.path.join(tmp, 'dist', 'manifest.json')) as f:
@@ -76,7 +75,7 @@ def test_bundle_version_override():
 def test_bundle_creates_zip():
     with tempfile.TemporaryDirectory() as tmp:
         cfg = _make_project(tmp, {'main.py': b'x=1\n'})
-        from host.bundle import build
+        from uota.bundle import build
         build(out_dir='dist', make_zip=True, cfg_path=cfg)
         zip_path = os.path.join(tmp, 'dist.zip')
         assert os.path.isfile(zip_path)
@@ -90,7 +89,7 @@ def test_bundle_sha256_in_manifest():
     with tempfile.TemporaryDirectory() as tmp:
         content = b'print("hello")\n'
         cfg = _make_project(tmp, {'main.py': content})
-        from host.bundle import build
+        from uota.bundle import build
         manifest = build(out_dir='dist', cfg_path=cfg)
         expected = hashlib.sha256(content).hexdigest()
         assert manifest['files']['main.py']['sha256'] == expected
@@ -100,7 +99,7 @@ def test_bundle_excludes_respected():
     with tempfile.TemporaryDirectory() as tmp:
         cfg = _make_project(tmp, {'main.py': b'x=1\n', 'secret.py': b'pass\n'},
                             extra_cfg={'excludedFiles': ['secret.py']})
-        from host.bundle import build
+        from uota.bundle import build
         manifest = build(out_dir='dist', cfg_path=cfg)
         assert 'main.py' in manifest['files']
         assert 'secret.py' not in manifest['files']
@@ -113,7 +112,7 @@ def _start_server(tmp, port, files=None, version='1.0.0'):
     if files is None:
         files = {'main.py': b'x=1\n'}
     cfg = _make_project(tmp, files, version=version)
-    from host.serve import serve
+    from uota.serve import serve
     ready = threading.Event()
     t = threading.Thread(
         target=serve,

@@ -4,3 +4,13 @@ __pycache__/
 .micropico
 dist/
 dist.zip
+
+# VS Code extension build output
+packages/vscode/out/
+packages/vscode/node_modules/
+packages/vscode/*.vsix
+
+# pip build artifacts
+packages/cli/*.egg-info/
+packages/cli/dist/
+packages/cli/build/

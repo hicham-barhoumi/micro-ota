@@ -1,17 +1,4 @@
-"""
-HTTP file server for micro-ota HTTP pull transport.
-
-Builds a manifest on the fly from the project's managed files and serves
-both the manifest and the files over HTTP so ESP32 devices can pull updates.
-
-Usage:
-    python3 host/serve.py [--port 8080] [--host 0.0.0.0]
-    python3 host/uota.py serve [--port 8080] [--host 0.0.0.0]
-
-The device's ota.json should contain:
-    "transports": ["wifi_tcp", "http_pull"],
-    "manifestUrl": "http://<this-machine-ip>:8080/manifest.json"
-"""
+"""HTTP file server for micro-ota HTTP pull transport."""
 
 import http.server
 import json
@@ -21,11 +8,8 @@ import threading
 
 
 class OTAHandler(http.server.BaseHTTPRequestHandler):
-    """Serves manifest.json and managed project files."""
-
-    # Set by serve(): project root and built manifest
     project_root = None
-    file_map     = {}     # url_path → absolute_local_path
+    file_map     = {}
     manifest     = {}
 
     def log_message(self, fmt, *args):
@@ -68,17 +52,7 @@ class _ThreadingServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 def serve(host='0.0.0.0', port=8080, project_root=None, version=None,
           cfg_path=None, on_ready=None):
-    """
-    Build manifest from the project root and start an HTTP server.
-
-    host        — bind address (default 0.0.0.0)
-    port        — TCP port (default 8080)
-    project_root— project directory (auto-detected from cfg_path if None)
-    version     — version string (read from ota.json if None)
-    cfg_path    — path to ota.json (auto-detected if None)
-    on_ready    — optional callback(host, port, manifest) called before blocking
-    """
-    from host.manifest import build as build_manifest
+    from .manifest import build as build_manifest
 
     if cfg_path is None:
         cfg_path = _find_cfg()
@@ -95,16 +69,11 @@ def serve(host='0.0.0.0', port=8080, project_root=None, version=None,
     full_patterns    = cfg.get('fullOtaFiles', ['**/*.py'])
     exclude_patterns = cfg.get('excludedFiles', [])
 
-    # Build manifest from project root
     os.chdir(project_root)
     manifest = build_manifest(full_patterns, exclude_patterns, version)
 
-    # Build url_path → local_path map
-    file_map = {}
-    for rel in manifest['files']:
-        file_map[rel] = os.path.join(project_root, rel)
+    file_map = {rel: os.path.join(project_root, rel) for rel in manifest['files']}
 
-    # Inject into handler class
     OTAHandler.project_root = project_root
     OTAHandler.file_map     = file_map
     OTAHandler.manifest     = manifest
@@ -127,29 +96,12 @@ def serve(host='0.0.0.0', port=8080, project_root=None, version=None,
         httpd.server_close()
 
 
-# ── helpers ───────────────────────────────────────────────────────────────────
-
 def _find_cfg():
-    d = os.path.dirname(os.path.abspath(__file__))
+    """Walk up from CWD looking for ota.json."""
+    d = os.getcwd()
     for _ in range(5):
         candidate = os.path.join(d, 'ota.json')
         if os.path.exists(candidate):
             return candidate
         d = os.path.dirname(d)
     raise FileNotFoundError('ota.json not found')
-
-
-# ── CLI entry point ───────────────────────────────────────────────────────────
-
-def main():
-    import argparse
-    p = argparse.ArgumentParser(description='micro-ota HTTP file server')
-    p.add_argument('--host',    default='0.0.0.0', help='Bind address')
-    p.add_argument('--port',    default=8080, type=int, help='TCP port')
-    p.add_argument('--version', default=None, help='Version string override')
-    args = p.parse_args()
-    serve(host=args.host, port=args.port, version=args.version)
-
-
-if __name__ == '__main__':
-    main()

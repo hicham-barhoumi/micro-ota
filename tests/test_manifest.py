@@ -8,8 +8,8 @@ import os
 import sys
 import tempfile
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from host.manifest import build, to_json, _sha256
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'packages', 'cli'))
+from uota.manifest import build, to_json, _sha256
 
 
 def _write(dir_, rel, content=b'hello'):

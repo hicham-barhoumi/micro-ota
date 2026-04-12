@@ -13,11 +13,18 @@ All tests run without hardware or a BLE radio.  They cover:
 
 import ast
 import importlib
+import os
 import sys
 import threading
 import types
 import unittest
 from unittest.mock import MagicMock, patch
+
+_PKG = os.path.join(os.path.dirname(__file__), '..', 'packages', 'cli')
+sys.path.insert(0, _PKG)
+
+_DEVICE_DIR = os.path.join(_PKG, 'uota', '_device')
+_HOST_DIR   = os.path.join(_PKG, 'uota')
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -36,7 +43,7 @@ def _parse(path):
 
 class TestDeviceBLESource(unittest.TestCase):
 
-    PATH = 'device/transports/ble.py'
+    PATH = os.path.join(_DEVICE_DIR, 'transports', 'ble.py')
 
     def test_parses(self):
         _parse(self.PATH)
@@ -90,7 +97,7 @@ class TestDeviceBLESource(unittest.TestCase):
 
 class TestHostBLESource(unittest.TestCase):
 
-    PATH = 'host/transports/ble.py'
+    PATH = os.path.join(_HOST_DIR, 'transports', 'ble.py')
 
     def test_parses(self):
         _parse(self.PATH)
@@ -129,19 +136,18 @@ class TestHostBLESource(unittest.TestCase):
 
 def _make_transport():
     """
-    Import host/transports/ble.py with bleak mocked so no BLE hardware needed.
+    Import uota/transports/ble.py with bleak mocked so no BLE hardware needed.
     Returns a fresh BLETransport instance (event loop started, not connected).
     """
-    import importlib.util, os
-    # Build a minimal fake bleak package
+    import importlib.util
     bleak_mod = types.ModuleType('bleak')
     bleak_mod.BleakScanner = MagicMock()
     bleak_mod.BleakClient  = MagicMock()
     sys.modules['bleak'] = bleak_mod
 
     spec = importlib.util.spec_from_file_location(
-        'host.transports.ble',
-        os.path.join(os.path.dirname(__file__), '..', 'host', 'transports', 'ble.py'),
+        'uota.transports.ble',
+        os.path.join(_HOST_DIR, 'transports', 'ble.py'),
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -203,12 +209,12 @@ class TestBLETransportUnit(unittest.TestCase):
 
     def test_no_bleak_raises_helpful_error(self):
         """BLETransport() raises RuntimeError with pip hint when bleak absent."""
-        import importlib.util, os
+        import importlib.util
         saved = sys.modules.pop('bleak', None)
         try:
             spec = importlib.util.spec_from_file_location(
-                'host.transports.ble_nobt',
-                os.path.join(os.path.dirname(__file__), '..', 'host', 'transports', 'ble.py'),
+                'uota.transports.ble_nobt',
+                os.path.join(_HOST_DIR, 'transports', 'ble.py'),
             )
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
@@ -225,14 +231,13 @@ class TestBLETransportUnit(unittest.TestCase):
 class TestFriendlyBLE(unittest.TestCase):
 
     def _friendly(self, exc):
-        import importlib.util, os
+        import importlib.util
         spec = importlib.util.spec_from_file_location(
-            'uota', os.path.join(os.path.dirname(__file__), '..', 'host', 'uota.py')
+            'uota.cli', os.path.join(_HOST_DIR, 'cli.py')
         )
         mod = importlib.util.module_from_spec(spec)
-        # uota imports transport modules at top level; stub them
-        sys.modules.setdefault('host.transports.wifi_tcp', MagicMock())
-        sys.modules.setdefault('host.transports.serial',   MagicMock())
+        sys.modules.setdefault('uota.transports.wifi_tcp', MagicMock())
+        sys.modules.setdefault('uota.transports.serial',   MagicMock())
         spec.loader.exec_module(mod)
         return mod._friendly(exc, {})
 

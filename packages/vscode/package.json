@@ -1,0 +1,67 @@
+{
+  "name": "micro-ota",
+  "displayName": "micro-ota",
+  "description": "OTA updates for MicroPython devices — WiFi, Serial, BLE",
+  "version": "1.0.0",
+  "publisher": "micro-ota",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Other"],
+  "keywords": ["micropython", "esp32", "ota", "ble", "serial"],
+  "icon": "icon.png",
+  "repository": { "type": "git", "url": "https://github.com/claudebarhoumi/micro-ota" },
+  "activationEvents": [
+    "workspaceContains:ota.json"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "micro-ota.init",      "title": "micro-ota: Initialize Project" },
+      { "command": "micro-ota.bootstrap", "title": "micro-ota: Bootstrap Device (Serial)" },
+      { "command": "micro-ota.fast",      "title": "micro-ota: Fast OTA Push" },
+      { "command": "micro-ota.full",      "title": "micro-ota: Full OTA Push" },
+      { "command": "micro-ota.terminal",  "title": "micro-ota: Open Device Terminal" },
+      { "command": "micro-ota.version",   "title": "micro-ota: Read Device Version" },
+      { "command": "micro-ota.flash",     "title": "micro-ota: Flash Firmware (.bin)" },
+      { "command": "micro-ota.serve",     "title": "micro-ota: Start HTTP OTA Server" },
+      { "command": "micro-ota.bundle",    "title": "micro-ota: Build Release Bundle" },
+      { "command": "micro-ota.listen",    "title": "micro-ota: RemoteIO Listen" }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "when": "resourceFilename == ota.json",
+          "command": "micro-ota.fast",
+          "group": "micro-ota"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "micro-ota",
+      "properties": {
+        "micro-ota.uotaPath": {
+          "type": "string",
+          "default": "uota",
+          "description": "Path to the uota executable (default: uota from PATH)"
+        },
+        "micro-ota.transport": {
+          "type": "string",
+          "enum": ["wifi_tcp", "serial", "ble"],
+          "default": "wifi_tcp",
+          "description": "Default OTA transport"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile":  "tsc -p ./",
+    "watch":    "tsc -watch -p ./",
+    "package":  "vsce package",
+    "install-deps": "npm install"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node":   "^18.0.0",
+    "typescript":    "^5.0.0",
+    "@vscode/vsce":  "^2.19.0"
+  }
+}

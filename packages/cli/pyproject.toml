@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "micro-ota"
+version = "1.0.0"
+description = "Simple, fast, reliable OTA for MicroPython devices"
+readme = "../../README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["micropython", "ota", "esp32", "ble", "wifi"]
+dependencies = [
+    "pyserial>=3.5",
+]
+
+[project.optional-dependencies]
+ble   = ["bleak>=0.21"]
+flash = ["esptool>=4.0"]
+all   = ["bleak>=0.21", "esptool>=4.0"]
+
+[project.scripts]
+uota = "uota.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+"uota._device"             = ["*.py"]
+"uota._device.transports"  = ["*.py"]

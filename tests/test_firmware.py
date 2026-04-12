@@ -10,10 +10,11 @@ import os
 import sys
 import tempfile
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+_PKG = os.path.join(os.path.dirname(__file__), '..', 'packages', 'cli')
+sys.path.insert(0, _PKG)
 
-_BOOT_GUARD = os.path.join(os.path.dirname(__file__), '..', 'device', 'boot_guard.py')
-_FIRMWARE   = os.path.join(os.path.dirname(__file__), '..', 'host', 'firmware.py')
+_BOOT_GUARD = os.path.join(_PKG, 'uota', '_device', 'boot_guard.py')
+_FIRMWARE   = os.path.join(_PKG, 'uota', 'firmware.py')
 
 
 # ── boot_guard logic tests ────────────────────────────────────────────────────
@@ -161,9 +162,11 @@ def test_flash_raises_on_missing_file():
 def test_uota_flash_subparser_has_erase():
     """uota flash should expose --erase, --chip, --baud flags."""
     import subprocess
+    env = os.environ.copy()
+    env['PYTHONPATH'] = _PKG + os.pathsep + env.get('PYTHONPATH', '')
     result = subprocess.run(
-        [sys.executable, 'host/uota.py', 'flash', '--help'],
-        capture_output=True, text=True
+        [sys.executable, '-m', 'uota.cli', 'flash', '--help'],
+        capture_output=True, text=True, env=env,
     )
     assert '--erase' in result.stdout
     assert '--chip' in result.stdout
