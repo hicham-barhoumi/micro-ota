@@ -1,0 +1,51 @@
+import network
+import socket
+import time
+
+
+class WiFiTCPTransport:
+    def __init__(self, ssid, password, hostname="micropython", port=2018):
+        self.ssid = ssid
+        self.password = password
+        self.hostname = hostname
+        self.port = port
+        self._server = None
+
+    def start(self):
+        self._connect_wifi()
+        self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._server.bind(('0.0.0.0', self.port))
+        self._server.listen(1)
+        print('[OTA] TCP server ready on port', self.port)
+
+    def accept(self):
+        conn, addr = self._server.accept()
+        print('[OTA] Connection from', addr)
+        return conn
+
+    def stop(self):
+        if self._server:
+            self._server.close()
+            self._server = None
+
+    def _connect_wifi(self):
+        sta = network.WLAN(network.STA_IF)
+        sta.active(True)
+        if sta.isconnected():
+            print('[OTA] WiFi already connected:', sta.ifconfig()[0])
+            return
+        if not self.ssid:
+            raise OSError('No SSID configured and WiFi not connected')
+        print('[OTA] Connecting to', self.ssid, '...')
+        try:
+            sta.config(dhcp_hostname=self.hostname)
+        except Exception:
+            pass
+        sta.connect(self.ssid, self.password)
+        deadline = time.time() + 20
+        while not sta.isconnected():
+            if time.time() > deadline:
+                raise OSError('WiFi connection timed out')
+            time.sleep(0.5)
+        print('[OTA] WiFi connected:', sta.ifconfig()[0])

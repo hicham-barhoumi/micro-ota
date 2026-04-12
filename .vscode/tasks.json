@@ -1,0 +1,93 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "μOTA: Fast Upload",
+            "type": "shell",
+            "command": "python3 ${workspaceFolder}/host/uota.py fast",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "μOTA: Full Upload",
+            "type": "shell",
+            "command": "python3 ${workspaceFolder}/host/uota.py full",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "μOTA: Full Upload + Wipe",
+            "type": "shell",
+            "command": "python3 ${workspaceFolder}/host/uota.py full --wipe",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "μOTA: Terminal",
+            "type": "shell",
+            "command": "python3 ${workspaceFolder}/host/uota.py terminal",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "μOTA: Device Version",
+            "type": "shell",
+            "command": "python3 ${workspaceFolder}/host/uota.py version",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "μOTA: Bootstrap (first time, serial)",
+            "type": "shell",
+            "command": "python3 ${workspaceFolder}/host/uota.py bootstrap",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "μOTA: Flash Firmware",
+            "type": "shell",
+            "command": "python3 ${workspaceFolder}/host/uota.py flash ${input:firmwarePath}",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "firmwarePath",
+            "type": "promptString",
+            "description": "Path to MicroPython .bin firmware file"
+        }
+    ]
+}
