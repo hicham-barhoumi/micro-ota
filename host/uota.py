@@ -113,6 +113,12 @@ def _friendly(exc, cfg=None):
     if isinstance(exc, FileNotFoundError):
         return 'File not found: ' + msg
 
+    # BLE-specific errors
+    if 'bleak' in msg.lower() or 'BLE' in msg or 'bluetooth' in msg.lower():
+        return 'BLE error: ' + msg
+    if isinstance(exc, RuntimeError) and 'bleak is required' in msg:
+        return msg   # already friendly (includes pip install hint)
+
     return None   # unexpected — caller will show raw exc + verbose hint
 
 
@@ -141,6 +147,10 @@ def get_transport(cfg, host_override=None, port_override=None, transport_overrid
             port = host_override or cfg.get('serialPort') or auto_detect_serial()
             baud = cfg.get('serialBaud', 115200)
             return SerialOTATransport(port, baud)
+        if name == 'ble':
+            from host.transports.ble import BLETransport
+            ble_name = host_override or cfg.get('bleName', 'micro-ota')
+            return BLETransport(ble_name)
 
     raise RuntimeError('No supported transport in config')
 
@@ -354,7 +364,7 @@ def main():
     fa.add_argument('--host',      help='Device hostname or IP')
     fa.add_argument('--port',      type=int, help='TCP port (WiFi) or serial port path')
     fa.add_argument('--version',   help='Version string to embed in manifest')
-    fa.add_argument('--transport', choices=['wifi_tcp', 'serial'],
+    fa.add_argument('--transport', choices=['wifi_tcp', 'serial', 'ble'],
                     help='Force transport (default: first in ota.json transports list)')
 
     # full
@@ -363,19 +373,19 @@ def main():
     fu.add_argument('--port', type=int)
     fu.add_argument('--version')
     fu.add_argument('--wipe', action='store_true', help='Wipe device before upload')
-    fu.add_argument('--transport', choices=['wifi_tcp', 'serial'])
+    fu.add_argument('--transport', choices=['wifi_tcp', 'serial', 'ble'])
 
     # terminal
     te = sub.add_parser('terminal', help='Interactive device terminal over WiFi')
     te.add_argument('--host')
     te.add_argument('--port', type=int)
-    te.add_argument('--transport', choices=['wifi_tcp', 'serial'])
+    te.add_argument('--transport', choices=['wifi_tcp', 'serial', 'ble'])
 
     # version
     ve = sub.add_parser('version', help='Read version from device')
     ve.add_argument('--host')
     ve.add_argument('--port', type=int)
-    ve.add_argument('--transport', choices=['wifi_tcp', 'serial'])
+    ve.add_argument('--transport', choices=['wifi_tcp', 'serial', 'ble'])
 
     # flash
     fl = sub.add_parser('flash', help='Flash MicroPython firmware via esptool')

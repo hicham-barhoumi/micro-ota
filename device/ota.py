@@ -349,6 +349,11 @@ class OTAUpdater:
                         interval=cfg.get('pullInterval', 60),
                         timeout=cfg.get('pullTimeout', 15),
                     ))
+                elif name == 'ble':
+                    from transports.ble import BLETransport
+                    result.append(BLETransport(
+                        name=cfg.get('bleName', 'micro-ota'),
+                    ))
                 else:
                     print('[OTA] Unknown transport:', name)
             except Exception as e:
