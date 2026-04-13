@@ -267,7 +267,8 @@ def cmd_init(args, cfg):
     else:
         if device_dst.exists():
             shutil.rmtree(device_dst)
-        shutil.copytree(device_src, device_dst)
+        shutil.copytree(device_src, device_dst,
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '*.pyo'))
         print('[init] Copied OTA device files → device/')
 
     # 2. Create ota.json
