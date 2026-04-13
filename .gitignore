@@ -2,8 +2,12 @@ __pycache__/
 *.pyc
 *.pyo
 .micropico
+
+# build output
 dist/
-dist.zip
+
+# credentials — copy from examples/basic/ota.json and fill in locally
+/ota.json
 
 # VS Code extension build output
 packages/vscode/out/
@@ -14,3 +18,4 @@ packages/vscode/*.vsix
 packages/cli/*.egg-info/
 packages/cli/dist/
 packages/cli/build/
+packages/cli/README.md

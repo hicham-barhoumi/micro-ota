@@ -1,0 +1,19 @@
+{
+    "version": "1.0.0",
+    "hostname": "192.168.1.100",
+    "port": 2018,
+    "remoteioPort": 2019,
+    "ssid": "YOUR_WIFI_SSID",
+    "password": "YOUR_WIFI_PASSWORD",
+    "otaKey": "",
+    "bleName": "micro-ota",
+    "serialPort": "",
+    "transports": ["wifi_tcp"],
+    "manifestUrl": "",
+    "pullInterval": 60,
+    "excludedFiles": [
+        ".git/**", "device/**", "*.zip", "dist/**"
+    ],
+    "fastOtaFiles": ["main.py"],
+    "fullOtaFiles": ["*.py", "lib/**", "*.json"]
+}

@@ -30,7 +30,42 @@ import _thread
 _STAGE   = '/ota_stage'
 _MANIFEST = '/ota_manifest.json'
 _VERSION  = '/ota_version.json'
-_PROTECTED = frozenset(['ota.py', 'boot_guard.py', 'boot.py', 'remoteio.py', 'transports', 'ota.json', 'ota_manifest.json', 'ota_version.json', 'ota_boot_state.json'])
+_PROTECTED = frozenset(['lib', 'boot.py', 'ota.json', 'ota_manifest.json', 'ota_version.json', 'ota_boot_state.json'])
+
+
+# ── HMAC-SHA256 (pure Python — MicroPython has no hmac module) ────────────────
+
+def _hmac_sha256_hex(key, msg):
+    """Return HMAC-SHA256(key, msg) as a lowercase hex string."""
+    if isinstance(key, str):
+        key = key.encode()
+    if isinstance(msg, str):
+        msg = msg.encode()
+    B = 64
+    if len(key) > B:
+        h = hashlib.sha256(); h.update(key); key = h.digest()
+    key = key + bytes(B - len(key))
+    ipad = bytes(b ^ 0x36 for b in key)
+    opad = bytes(b ^ 0x5C for b in key)
+    inner = hashlib.sha256(); inner.update(ipad); inner.update(msg)
+    outer = hashlib.sha256(); outer.update(opad); outer.update(inner.digest())
+    return ''.join('%02x' % b for b in outer.digest())
+
+
+def _signing_payload(manifest):
+    """Same canonical form as the host: version\npath:sha256\n..."""
+    lines = [manifest.get('version', '')]
+    for path in sorted(manifest.get('files', {})):
+        lines.append('{}:{}'.format(path, manifest['files'][path]['sha256']))
+    return '\n'.join(lines)
+
+
+def _verify_manifest_sig(manifest, key):
+    """Return True if sig is valid or key is empty (backward compat)."""
+    if not key:
+        return True
+    expected = _hmac_sha256_hex(key, _signing_payload(manifest))
+    return manifest.get('sig', '') == expected
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -127,7 +162,7 @@ def _walk_stage():
 
 # ── OTA session ───────────────────────────────────────────────────────────────
 
-def _handle_ota(conn):
+def _handle_ota(conn, cfg):
     _send(conn, 'ready\n')
     new_manifest = None
     staged = []          # list of final_paths that were staged
@@ -156,6 +191,12 @@ def _handle_ota(conn):
             if cmd == b'manifest':
                 data = _read_exact(conn, int(arg))
                 new_manifest = json.loads(data)
+                key = cfg.get('otaKey', '')
+                if not _verify_manifest_sig(new_manifest, key):
+                    print('[OTA] Manifest signature invalid — rejecting')
+                    _send(conn, 'sig_mismatch\n')
+                    _remove_tree(_STAGE)
+                    return
                 print('[OTA] Manifest:', len(new_manifest.get('files', {})), 'files')
                 _send(conn, 'ok\n')
 
@@ -243,7 +284,7 @@ def _commit(new_manifest, staged):
 
 # ── command terminal ──────────────────────────────────────────────────────────
 
-def _handle(conn):
+def _handle(conn, cfg):
     line = _read_line(conn)
     parts = line.split(b' ', 1)
     cmd = parts[0]
@@ -253,7 +294,7 @@ def _handle(conn):
         _send(conn, 'pong\n')
 
     elif cmd == b'start_ota':
-        _handle_ota(conn)
+        _handle_ota(conn, cfg)
 
     elif cmd == b'version':
         try:
@@ -382,7 +423,7 @@ class OTAUpdater:
                 while True:
                     conn = transport.accept()
                     try:
-                        _handle(conn)
+                        _handle(conn, self._config)
                     except Exception as e:
                         print('[OTA] Handler error:', e)
                     finally:

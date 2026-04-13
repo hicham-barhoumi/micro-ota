@@ -6,6 +6,7 @@ computes SHA256 for each, returns a dict ready to send to the device.
 import os
 import glob
 import hashlib
+import hmac
 import json
 
 
@@ -52,6 +53,32 @@ def _sha256(path):
 
 def to_json(manifest):
     return json.dumps(manifest, separators=(',', ':'))
+
+
+def _signing_payload(manifest):
+    """Deterministic bytes over version + sorted(path:sha256) lines."""
+    lines = [manifest.get('version', '')]
+    for path in sorted(manifest.get('files', {})):
+        lines.append('{}:{}'.format(path, manifest['files'][path]['sha256']))
+    return '\n'.join(lines).encode()
+
+
+def sign(manifest, key):
+    """Return a copy of manifest with a 'sig' field (HMAC-SHA256 hex)."""
+    payload = _signing_payload(manifest)
+    sig = hmac.new(key.encode(), payload, hashlib.sha256).hexdigest()
+    result = dict(manifest)
+    result['sig'] = sig
+    return result
+
+
+def verify(manifest, key):
+    """Return True if sig is valid for key. Always True when key is empty."""
+    if not key:
+        return True
+    payload = _signing_payload(manifest)
+    expected = hmac.new(key.encode(), payload, hashlib.sha256).hexdigest()
+    return manifest.get('sig', '') == expected
 
 
 def from_zip(zip_path):

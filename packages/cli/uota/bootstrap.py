@@ -11,17 +11,20 @@ Files uploaded:
 """
 
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 _BUNDLED = Path(__file__).parent / '_device'
 
 _DEVICE_RELPATHS = [
-    ('ota.py',                    '/ota.py'),
-    ('boot_guard.py',             '/boot_guard.py'),
-    ('remoteio.py',               '/remoteio.py'),
-    ('transports/__init__.py',    '/transports/__init__.py'),
-    ('transports/wifi_tcp.py',    '/transports/wifi_tcp.py'),
+    ('ota.py',                    '/lib/ota.py'),
+    ('boot_guard.py',             '/lib/boot_guard.py'),
+    ('remoteio.py',               '/lib/remoteio.py'),
+    ('transports/__init__.py',    '/lib/transports/__init__.py'),
+    ('transports/wifi_tcp.py',    '/lib/transports/wifi_tcp.py'),
 ]
 
 _BOOT_PY = '''\
@@ -56,13 +59,35 @@ time.sleep(6)
 '''
 
 
-def run(port, baud=115200, device_dir=None):
+def _compile_mpy(src_path, tmp_dir):
+    """
+    Compile src_path to .mpy using mpy-cross.
+    Returns Path to the compiled .mpy, or None if mpy-cross is unavailable
+    or compilation fails.
+    """
+    mpy_cross = shutil.which('mpy-cross')
+    if not mpy_cross:
+        return None
+    out = Path(tmp_dir) / (Path(src_path).stem + '.mpy')
+    result = subprocess.run(
+        [mpy_cross, '-o', str(out), str(src_path)],
+        capture_output=True,
+    )
+    if result.returncode == 0 and out.exists():
+        return out
+    return None
+
+
+def run(port, baud=115200, device_dir=None, mpy=False):
     """
     Bootstrap the device on *port*.
 
     device_dir — directory containing OTA device files.
                  Defaults to <cwd>/device if it exists, otherwise the
                  bundled _device/ folder from the package.
+    mpy        — compile infrastructure files to .mpy with mpy-cross before
+                 uploading (faster import, less RAM). Requires mpy-cross on PATH
+                 and version-matched to device firmware.
     """
     from .transports.serial import RawREPL, auto_detect_port
 
@@ -84,30 +109,54 @@ def run(port, baud=115200, device_dir=None):
 
     print('Bootstrapping {} @ {} baud …'.format(port, baud))
 
-    with RawREPL(port, baud) as repl:
-        # Upload OTA infrastructure files
-        for rel, remote in _DEVICE_RELPATHS:
-            local = device_dir / rel
-            if not local.exists():
-                print('  [skip] {} not found'.format(rel))
-                continue
-            print('  {:<45} → {}'.format(rel, remote))
-            repl.put_file(str(local), remote, on_progress=_progress(rel))
-
-        # Upload ota.json from the project (current dir)
-        ota_json = Path.cwd() / 'ota.json'
-        if ota_json.exists():
-            print('  {:<45} → /ota.json'.format('ota.json'))
-            repl.put_file(str(ota_json), '/ota.json', on_progress=_progress('ota.json'))
+    if mpy:
+        mpy_cross = shutil.which('mpy-cross')
+        if mpy_cross:
+            print('[bootstrap] mpy-cross found at', mpy_cross)
         else:
-            print('  [skip] ota.json not found in current directory')
+            print('[bootstrap] WARNING: mpy-cross not found on PATH — uploading .py files instead')
+            mpy = False
 
-        # Write generated boot.py
-        print('  {:<45} → /boot.py'.format('(generated boot.py)'))
-        repl.write_text('/boot.py', _BOOT_PY)
+    tmp_dir = tempfile.mkdtemp() if mpy else None
+    try:
+        with RawREPL(port, baud) as repl:
+            # Upload OTA infrastructure files
+            for rel, remote in _DEVICE_RELPATHS:
+                local = device_dir / rel
+                if not local.exists():
+                    print('  [skip] {} not found'.format(rel))
+                    continue
 
-        print('\nBootstrap complete. Resetting device …')
-        repl.soft_reset()
+                if mpy:
+                    compiled = _compile_mpy(local, tmp_dir)
+                    if compiled:
+                        remote_mpy = remote.rsplit('.', 1)[0] + '.mpy'
+                        print('  {:<45} → {} (.mpy)'.format(rel, remote_mpy))
+                        repl.put_file(str(compiled), remote_mpy, on_progress=_progress(rel))
+                        continue
+                    else:
+                        print('  [mpy-cross failed] {} — uploading .py'.format(rel))
+
+                print('  {:<45} → {}'.format(rel, remote))
+                repl.put_file(str(local), remote, on_progress=_progress(rel))
+
+            # Upload ota.json from the project (current dir)
+            ota_json = Path.cwd() / 'ota.json'
+            if ota_json.exists():
+                print('  {:<45} → /ota.json'.format('ota.json'))
+                repl.put_file(str(ota_json), '/ota.json', on_progress=_progress('ota.json'))
+            else:
+                print('  [skip] ota.json not found in current directory')
+
+            # Write generated boot.py
+            print('  {:<45} → /boot.py'.format('(generated boot.py)'))
+            repl.write_text('/boot.py', _BOOT_PY)
+
+            print('\nBootstrap complete. Resetting device …')
+            repl.soft_reset()
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     print('Done. Device is now OTA-capable.')
     print('Next step: run  uota fast  to upload your application.')

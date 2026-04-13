@@ -26,7 +26,7 @@ import socket
 import time
 from pathlib import Path
 
-from .manifest import build as build_manifest, to_json as manifest_to_json
+from .manifest import build as build_manifest, to_json as manifest_to_json, sign as sign_manifest
 from .transports.wifi_tcp import WiFiTCPTransport
 from .transports.serial import SerialOTATransport
 
@@ -280,6 +280,7 @@ def cmd_init(args, cfg):
             "remoteioPort": 2019,
             "ssid":         "",
             "password":     "",
+            "otaKey":       "",
             "bleName":      "micro-ota",
             "serialPort":   "",
             "transports":   ["wifi_tcp"],
@@ -321,6 +322,7 @@ def cmd_bootstrap(args, cfg):
     do_bootstrap(
         port=args.port or cfg.get('serialPort'),
         baud=args.baud,
+        mpy=args.mpy,
     )
 
 
@@ -329,6 +331,10 @@ def cmd_fast(args, cfg):
     excludes  = cfg.get('excludedFiles', [])
     version   = args.version or cfg.get('version', 'unknown')
     manifest  = build_manifest(patterns, excludes, version)
+    key = cfg.get('otaKey', '')
+    if key:
+        manifest = sign_manifest(manifest, key)
+        print('Manifest signed (HMAC-SHA256).')
     files     = {p: p for p in manifest['files']}
     transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None))
     print('Fast OTA: {} file(s)'.format(len(files)))
@@ -340,6 +346,10 @@ def cmd_full(args, cfg):
     excludes  = cfg.get('excludedFiles', [])
     version   = args.version or cfg.get('version', 'unknown')
     manifest  = build_manifest(patterns, excludes, version)
+    key = cfg.get('otaKey', '')
+    if key:
+        manifest = sign_manifest(manifest, key)
+        print('Manifest signed (HMAC-SHA256).')
     files     = {p: p for p in manifest['files']}
     transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None))
     print('Full OTA: {} file(s){}'.format(len(files), '  [wipe first]' if args.wipe else ''))
@@ -443,6 +453,8 @@ def main():
     bs = sub.add_parser('bootstrap', help='First-time upload of OTA lib via serial')
     bs.add_argument('--port', help='Serial port (auto-detected if omitted)')
     bs.add_argument('--baud', type=int, default=115200)
+    bs.add_argument('--mpy', action='store_true',
+                    help='Compile OTA files to .mpy with mpy-cross (faster import, less RAM)')
 
     # fast
     fa = sub.add_parser('fast', help='Push fastOtaFiles to the device')

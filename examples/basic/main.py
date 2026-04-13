@@ -1,3 +1,5 @@
+# Example application — blinks the onboard LED every second.
+# Deploy this with:  uota fast
 import time
 from machine import Pin
 

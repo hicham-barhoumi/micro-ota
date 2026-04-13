@@ -1,6 +1,6 @@
 # micro-ota
 
-Simple, fast, reliable Over-The-Air updates for MicroPython. Push code to your ESP32 over WiFi, USB serial, or BLE; talk to it in real time over a persistent side-channel; roll back crashed firmware automatically.
+Simple, fast, reliable Over-The-Air updates for MicroPython. Push code to your ESP32 over WiFi, USB serial, or BLE; talk to it in real time over a persistent side-channel; roll back crashed firmware automatically; sign manifests with HMAC-SHA256 so only authorised pushes are accepted.
 
 ---
 
@@ -33,6 +33,8 @@ uota terminal               # interactive device shell
 
 `uota init` copies the OTA infrastructure files into `device/` in your project so you can inspect or customise them before bootstrap.
 
+See `examples/basic/` for a complete starter project.
+
 ---
 
 ## How it works
@@ -41,15 +43,15 @@ uota terminal               # interactive device shell
 [ PC ]   uota fast              uota remoteio listen
             │  TCP :2018               │  TCP :2019
             ▼                          ▼
-[ ESP32 ]  ota.py  ──────────  remoteio.py
-           │          boot_guard.py
-           ▼
-        main.py  (your app)
+[ ESP32 ]  /lib/ota.py  ───────  /lib/remoteio.py
+                │        /lib/boot_guard.py
+                ▼
+           main.py  (your app)
 ```
 
 Three background threads start at boot:
 
-- **OTA server** (port 2018) — accepts file pushes, applies them atomically, resets.
+- **OTA server** (port 2018) — accepts file pushes, verifies HMAC signature, applies atomically, resets.
 - **RemoteIO server** (port 2019) — forwards `print()` output to the host and handles named RPC calls.
 - **Boot guard** — counts consecutive crashes so a bad update cannot brick the device.
 
@@ -57,11 +59,34 @@ WiFi, USB serial, BLE, and HTTP pull are all supported as transports.
 
 ---
 
+## Device filesystem layout
+
+After `uota bootstrap`, the device filesystem looks like this:
+
+```
+/boot.py                     ← starts OTA + RemoteIO threads
+/ota.json                    ← config (ssid, hostname, otaKey, transports …)
+/lib/
+    ota.py  (or .mpy)        ← OTA server
+    boot_guard.py
+    remoteio.py
+    transports/
+        wifi_tcp.py
+        serial.py
+        ble.py
+        http_pull.py
+/main.py                     ← your application
+```
+
+`/lib` is on MicroPython's default `sys.path`, so `import ota`, `import boot_guard` etc. work without any path changes.
+
+---
+
 ## Project structure (your project after `uota init`)
 
 ```
 myproject/
-├── ota.json            ← configuration
+├── ota.json            ← configuration (keep out of git — has credentials)
 ├── main.py             ← your application
 ├── boot.py             ← auto-generated: starts OTA + RemoteIO threads
 └── device/             ← OTA infrastructure files (copied from package)
@@ -86,7 +111,7 @@ uota <command> [options]
 | Command | Description |
 |---|---|
 | `init [--dir DIR] [--force]` | Initialize project — copy device files + create `ota.json` |
-| `bootstrap [--port PORT] [--baud BAUD]` | First-time upload of OTA library via serial |
+| `bootstrap [--port PORT] [--baud BAUD] [--mpy]` | First-time upload of OTA library via serial |
 | `fast [--transport T]` | Push `fastOtaFiles` (default: `main.py`) |
 | `full [--transport T] [--wipe]` | Push all managed files |
 | `terminal [--transport T]` | Interactive device shell |
@@ -107,6 +132,14 @@ All `fast`, `full`, `version`, `terminal` commands accept:
 | `--port PORT` | `ota.json port` | TCP port |
 | `--transport wifi_tcp\|serial\|ble` | first in `ota.json transports` | Transport |
 | `--version VER` | `ota.json version` | Version string to embed |
+
+### `--mpy` flag (bootstrap)
+
+```bash
+uota bootstrap --mpy
+```
+
+Compiles all OTA infrastructure files to `.mpy` bytecode with `mpy-cross` before uploading. Faster import time and lower RAM usage on the device. Requires `mpy-cross` to be installed and version-matched to the device's MicroPython firmware. Falls back to `.py` gracefully if `mpy-cross` is not found.
 
 ---
 
@@ -170,6 +203,29 @@ uota bundle --zip   # or build a static bundle for any web server
 
 ---
 
+## Security — HMAC-SHA256 manifest signing
+
+Set a shared secret in `ota.json` on both the host and the device:
+
+```json
+{ "otaKey": "your-secret-key" }
+```
+
+The host signs every manifest with HMAC-SHA256 before sending it. The device verifies the signature before accepting any OTA push. A missing or incorrect signature causes the device to respond `sig_mismatch` and abort.
+
+Leave `otaKey` empty (the default) to disable signing — fully backward compatible.
+
+**Signing payload** (deterministic, order-independent):
+
+```
+<version>
+<path>:<sha256>
+<path>:<sha256>
+...                 (file paths sorted lexicographically)
+```
+
+---
+
 ## RemoteIO
 
 A persistent side-channel on port 2019 for streaming `print()` output and calling named handlers on the device.
@@ -193,12 +249,6 @@ with RemoteIOClient('192.168.1.100') as rio:
     print(rio.call('ping'))         # 'pong'
     print(rio.call('free_mem'))     # 98304
     print(rio.call('uptime_ms'))    # 12345
-
-# Stream prints while making calls
-import threading
-with RemoteIOClient('192.168.1.100') as rio:
-    threading.Thread(target=rio.listen, daemon=True).start()
-    result = rio.call('sensor_data')
 ```
 
 ### Registering handlers on the device
@@ -238,6 +288,7 @@ def _(state=False):
     "remoteioPort": 2019,
     "ssid":         "MyWiFi",
     "password":     "MyPassword",
+    "otaKey":       "",
     "bleName":      "micro-ota",
     "serialPort":   "",
     "transports":   ["wifi_tcp"],
@@ -256,6 +307,7 @@ def _(state=False):
 | `port` | OTA server port (default `2018`) |
 | `remoteioPort` | RemoteIO server port (default `2019`) |
 | `ssid` / `password` | WiFi credentials (stored on device) |
+| `otaKey` | HMAC-SHA256 signing key — empty disables signing |
 | `bleName` | BLE advertisement name (max 20 chars) |
 | `serialPort` | Serial port (auto-detected if empty) |
 | `transports` | Active transports on the device |
@@ -264,6 +316,8 @@ def _(state=False):
 | `excludedFiles` | Glob patterns excluded from all OTA uploads |
 | `fastOtaFiles` | Files pushed by `uota fast` |
 | `fullOtaFiles` | Files pushed by `uota full` |
+
+> `ota.json` contains WiFi credentials — add it to `.gitignore`. Use `examples/basic/ota.json` as a template.
 
 ---
 
@@ -315,13 +369,13 @@ uota flash fw.bin   # or reflash MicroPython firmware
 | `get <path>` | `<size>\n<binary>` | Download a file |
 | `rm <path>` | `ok` / `error: ...` | Delete a file |
 | `reset` | `ok` then resets | Soft reset |
-| `wipe` | `ok` | Delete user files, keep OTA library |
+| `wipe` | `ok` | Delete user files, keep `/lib` |
 | `start_ota` | `ready` | Begin OTA session |
 
 ### OTA session
 
 ```
-manifest <size>\n<json>              → ok
+manifest <size>\n<json>              → ok / sig_mismatch
 file <name>;<size>;<sha256>\n<bin>   → ok / sha256_mismatch
 ...
 end_ota                              → ok  (atomic commit + reset)
@@ -329,6 +383,8 @@ abort                                → aborted  (staging discarded)
 ```
 
 Files are staged in `/ota_stage/`. On `end_ota`: old files not in the new manifest are deleted, staged files are moved atomically, version is written, device resets.
+
+If `otaKey` is set on the device and the manifest signature is missing or incorrect, the device responds `sig_mismatch` and the session is aborted before any file is transferred.
 
 ---
 
@@ -339,10 +395,16 @@ Located in `packages/vscode/`. Activates automatically when `ota.json` is presen
 ### Build
 
 ```bash
+bash scripts/build.sh       # builds pip package + VS Code extension into dist/
+```
+
+Or build the extension separately:
+
+```bash
 cd packages/vscode
 npm install
 npm run compile
-npx vsce package    # produces micro-ota-1.0.0.vsix
+npx vsce package            # produces micro-ota-1.0.0.vsix in current dir
 ```
 
 ### Install
@@ -378,13 +440,17 @@ Extensions → ⋯ → Install from VSIX…
 ## Tests
 
 ```bash
-# Unit tests — 83 total, no hardware required
-python3 tests/test_manifest.py          # manifest builder (9)
-python3 tests/test_protocol.py          # OTA protocol with mock device (9)
-python3 tests/test_serial_transport.py  # serial transport with mock serial (11)
-python3 tests/test_http_pull.py         # HTTP pull + bundle + serve (15)
-python3 tests/test_firmware.py          # firmware flash + boot_guard (14)
-python3 -m unittest tests/test_ble_transport.py  # BLE transport (25)
+# All unit tests (no hardware required)
+python3 -m unittest discover -s tests -p 'test_*.py'
+
+# Individual suites
+python3 -m unittest tests/test_manifest.py          # manifest builder (9)
+python3 -m unittest tests/test_protocol.py          # OTA protocol with mock device (9)
+python3 -m unittest tests/test_serial_transport.py  # serial transport (11)
+python3 -m unittest tests/test_http_pull.py         # HTTP pull + bundle + serve (15)
+python3 -m unittest tests/test_firmware.py          # firmware flash + boot_guard (14)
+python3 -m unittest tests/test_security.py          # HMAC signing + verification (16)
+python3 -m unittest tests/test_ble_transport.py     # BLE transport — requires bleak (25)
 
 # Hardware-in-the-loop (ESP32 on /dev/ttyUSB0)
 sg dialout -c "python3 tests/test_hardware.py"
@@ -398,22 +464,27 @@ sg dialout -c "SKIP_WIFI=1   python3 tests/test_hardware.py"  # serial only
 
 ```
 micro-ota/
+├── examples/
+│   └── basic/              ← complete starter project template
+│       ├── ota.json
+│       ├── main.py
+│       └── boot.py
 ├── packages/
-│   ├── cli/                      ← pip package source
+│   ├── cli/                ← pip package source
 │   │   ├── pyproject.toml
 │   │   └── uota/
-│   │       ├── cli.py            ← entry point (uota command)
-│   │       ├── manifest.py
+│   │       ├── cli.py      ← entry point (uota command)
+│   │       ├── manifest.py ← build + sign + verify manifests
 │   │       ├── bootstrap.py
 │   │       ├── firmware.py
 │   │       ├── serve.py
 │   │       ├── bundle.py
 │   │       ├── remoteio.py
-│   │       ├── transports/       ← host-side transports
+│   │       ├── transports/ ← host-side transports
 │   │       │   ├── wifi_tcp.py
 │   │       │   ├── serial.py
 │   │       │   └── ble.py
-│   │       └── _device/          ← bundled MicroPython files
+│   │       └── _device/    ← bundled MicroPython files (uploaded by bootstrap)
 │   │           ├── ota.py
 │   │           ├── boot_guard.py
 │   │           ├── remoteio.py
@@ -422,15 +493,11 @@ micro-ota/
 │   │               ├── serial.py
 │   │               ├── ble.py
 │   │               └── http_pull.py
-│   └── vscode/                   ← VS Code extension source
+│   └── vscode/             ← VS Code extension source
 │       ├── package.json
 │       ├── tsconfig.json
 │       └── src/extension.ts
+├── scripts/
+│   └── build.sh            ← builds pip wheel + VS Code .vsix into dist/
 └── tests/
 ```
-
----
-
-## Roadmap
-
-- **Phase 7** — HMAC-SHA256 manifest signing (shared key in `ota.json`)

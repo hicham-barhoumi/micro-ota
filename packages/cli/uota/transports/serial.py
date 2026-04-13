@@ -212,8 +212,10 @@ _INLINE_SERVER = (
     '  if isinstance(d,str):d=d.encode("latin-1")\n'
     '  _out.write(d)\n'
     ' def close(self):pass\n'
+    'import json as _j\n'
+    'try:\n _g=_j.load(open("ota.json"))\nexcept:_g={}\n'
     'from ota import _handle as _h\n'
-    'while True:_h(_C())\n'
+    'while True:_h(_C(),_g)\n'
 )
 
 

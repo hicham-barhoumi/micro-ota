@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "micro-ota"
 version = "1.0.0"
 description = "Simple, fast, reliable OTA for MicroPython devices"
-readme = "../../README.md"
+readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 keywords = ["micropython", "ota", "esp32", "ble", "wifi"]
