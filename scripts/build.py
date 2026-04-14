@@ -52,9 +52,9 @@ def info(msg): print(f'  {BLUE}→{RESET}  {msg}')
 def err(msg):  print(f'  {RED}✘{RESET}  {msg}', file=sys.stderr)
 
 
-def _run(*cmd, cwd=None, check=True):
+def _run(*cmd, cwd=None, check=True, env=None):
     return subprocess.run(cmd, cwd=cwd, check=check,
-                          capture_output=False, text=True)
+                          capture_output=False, text=True, env=env)
 
 
 def build_pip():
@@ -87,10 +87,26 @@ def build_pip():
     ok('pip package built')
 
 
+def _find_npm():
+    """
+    Find npm, preferring nvm-installed versions over the system npm.
+    nvm installs into ~/.nvm/versions/node/<version>/bin/; we pick the
+    highest version available so we always use the most capable Node.
+    Falls back to whatever npm is on PATH.
+    """
+    # nvm on Linux/macOS — prefer over system npm (avoids Node 18 / undici issues)
+    nvm_dir = Path.home() / '.nvm' / 'versions' / 'node'
+    if nvm_dir.is_dir():
+        candidates = sorted(nvm_dir.glob('*/bin/npm'), reverse=True)
+        if candidates:
+            return str(candidates[0])
+    return shutil.which('npm')
+
+
 def build_vscode():
     print('\n[ VS Code extension ]')
 
-    npm = shutil.which('npm')
+    npm = _find_npm()
     if not npm:
         err('npm not found — skipping VS Code extension build')
         err('Install Node.js from https://nodejs.org then rerun this script')
@@ -104,8 +120,12 @@ def build_vscode():
     _run(npm, 'run', 'compile', cwd=VS_DIR)
 
     info('packaging extension…')
-    npx = shutil.which('npx') or npm.replace('npm', 'npx')
-    _run(npx, 'vsce', 'package', '--out', str(DIST), cwd=VS_DIR)
+    npm_bin = str(Path(npm).parent)
+    npx = str(Path(npm).parent / 'npx')
+    # Ensure the nvm Node bin is first on PATH so vsce uses the right node
+    import os as _os
+    env = {**_os.environ, 'PATH': npm_bin + _os.pathsep + _os.environ.get('PATH', '')}
+    _run(npx, 'vsce', 'package', '--out', str(DIST), cwd=VS_DIR, env=env)
 
     ok('VS Code extension built')
 

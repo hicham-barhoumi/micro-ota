@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Load nvm if present (needed when Node was installed via nvm)
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 # Build script for micro-ota
 #
 # Produces in dist/:
