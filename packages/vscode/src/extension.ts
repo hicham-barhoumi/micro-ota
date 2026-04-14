@@ -50,12 +50,30 @@ async function pickBinFile(): Promise<string | undefined> {
 
 // ── status bar ────────────────────────────────────────────────────────────────
 
-function createStatusBar(): vscode.StatusBarItem {
-    const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
-    item.text    = '$(broadcast) micro-ota';
-    item.tooltip = 'micro-ota: click for Fast OTA';
-    item.command = 'micro-ota.fast';
-    return item;
+interface BarButton {
+    text: string;
+    tooltip: string;
+    command: string;
+    priority: number;
+}
+
+const BAR_BUTTONS: BarButton[] = [
+    { text: '$(zap) Fast',          tooltip: 'micro-ota: Fast OTA Push',        command: 'micro-ota.fast',      priority: 106 },
+    { text: '$(cloud-upload) Full', tooltip: 'micro-ota: Full OTA Push',        command: 'micro-ota.full',      priority: 105 },
+    { text: '$(terminal) Shell',    tooltip: 'micro-ota: Open Device Terminal', command: 'micro-ota.terminal',  priority: 104 },
+    { text: '$(tag) Version',       tooltip: 'micro-ota: Read Device Version',  command: 'micro-ota.version',   priority: 103 },
+    { text: '$(radio-tower) Listen',tooltip: 'micro-ota: RemoteIO Listen',      command: 'micro-ota.listen',    priority: 102 },
+    { text: '$(plug) Bootstrap',    tooltip: 'micro-ota: Bootstrap Device (Serial)', command: 'micro-ota.bootstrap', priority: 101 },
+];
+
+function createStatusBarItems(): vscode.StatusBarItem[] {
+    return BAR_BUTTONS.map(btn => {
+        const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, btn.priority);
+        item.text    = btn.text;
+        item.tooltip = btn.tooltip;
+        item.command = btn.command;
+        return item;
+    });
 }
 
 // ── command handlers ──────────────────────────────────────────────────────────
@@ -129,17 +147,14 @@ function cmdListen(): void {
 // ── activation ────────────────────────────────────────────────────────────────
 
 export function activate(context: vscode.ExtensionContext): void {
-    const statusBar = createStatusBar();
-    context.subscriptions.push(statusBar);
+    const statusBarItems = createStatusBarItems();
+    statusBarItems.forEach(item => context.subscriptions.push(item));
 
-    // Show status bar only when ota.json is present
+    // Show status bar buttons only when ota.json is present
     const updateBar = () => {
         const root = workspaceRoot();
-        if (root && findOtaJson(root)) {
-            statusBar.show();
-        } else {
-            statusBar.hide();
-        }
+        const visible = !!(root && findOtaJson(root));
+        statusBarItems.forEach(item => visible ? item.show() : item.hide());
     };
     updateBar();
 
