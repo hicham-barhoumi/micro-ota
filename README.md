@@ -395,8 +395,14 @@ Located in `packages/vscode/`. Activates automatically when `ota.json` is presen
 ### Build
 
 ```bash
-bash scripts/build.sh       # builds pip package + VS Code extension into dist/
+# Linux / macOS
+bash scripts/build.sh
+
+# Windows (or any platform)
+python scripts/build.py
 ```
+
+Both scripts produce the same artifacts in `dist/`. The Python script also accepts `--pip` or `--vscode` to build one at a time.
 
 Or build the extension separately:
 

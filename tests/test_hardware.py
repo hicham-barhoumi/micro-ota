@@ -2,8 +2,9 @@
 Hardware-in-the-loop tests for micro-ota.
 
 Requirements:
-  - ESP32 on /dev/ttyUSB0, bootstrapped and running the OTA server
-  - Run:  sg dialout -c "python3 tests/test_hardware.py"
+  - ESP32 bootstrapped and running the OTA server
+  - Linux/macOS: sg dialout -c "python3 tests/test_hardware.py"
+  - Windows:     python tests/test_hardware.py  (run from a terminal with driver installed)
 
 Skip transports selectively:
   SKIP_WIFI=1   python3 tests/test_hardware.py   (serial tests only)
@@ -28,13 +29,17 @@ from uota.cli import send_ota
 
 def _cfg():
     path = os.path.join(os.path.dirname(__file__), '..', 'ota.json')
-    with open(path) as f:
-        return json.load(f)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}  # no ota.json — hardware tests will be skipped at runtime
 
 CFG         = _cfg()
 DEVICE_IP   = CFG.get('hostname', '192.168.137.215')
 DEVICE_PORT = CFG.get('port', 2018)
-SERIAL_PORT = CFG.get('serialPort', '/dev/ttyUSB0')
+_default_port = 'COM3' if sys.platform == 'win32' else '/dev/ttyUSB0'
+SERIAL_PORT = CFG.get('serialPort', _default_port)
 SERIAL_BAUD = CFG.get('serialBaud', 115200)
 
 SKIP_WIFI   = os.environ.get('SKIP_WIFI')

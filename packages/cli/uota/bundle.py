@@ -56,7 +56,7 @@ def build(out_dir='dist', make_zip=False, version=None,
             for root, _, files in os.walk(out_abs):
                 for fname in files:
                     full = os.path.join(root, fname)
-                    arc  = os.path.relpath(full, out_abs)
+                    arc  = os.path.relpath(full, out_abs).replace('\\', '/')
                     zf.write(full, arc)
         print('[bundle] %s' % os.path.relpath(zip_path, project_root))
 

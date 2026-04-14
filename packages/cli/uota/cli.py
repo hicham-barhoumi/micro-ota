@@ -80,6 +80,11 @@ def _friendly(exc, cfg=None):
                         "  Check the USB cable or set serialPort in ota.json.").format(port)
             if 'Permission denied' in msg or 'Access is denied' in msg:
                 port = msg.split("'")[1] if "'" in msg else '(port)'
+                import sys as _sys
+                if _sys.platform == 'win32':
+                    return ("Permission denied on {}.\n"
+                            "  Check that no other program (e.g. Thonny, PuTTY) has the port open.\n"
+                            "  You may also need to install the CP210x / CH340 driver.").format(port)
                 return ("Permission denied on {}.\n"
                         "  Run: sudo usermod -aG dialout $USER  then log out and back in.\n"
                         "  Or prefix your command with: sg dialout -c \"...\"").format(port)
