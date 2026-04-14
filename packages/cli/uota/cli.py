@@ -192,7 +192,9 @@ def send_ota(transport, files, manifest, wipe=False):
     start = time.time()
     with transport:
         if wipe:
-            transport.connect()
+            # transport is already connected via __enter__; send wipe, then
+            # close and reopen so the inline server is re-injected for the OTA
+            # session (serial) or a fresh TCP connection is made (WiFi).
             transport.write_line('wipe')
             resp = transport.read_line()
             if resp.strip() != 'ok':
