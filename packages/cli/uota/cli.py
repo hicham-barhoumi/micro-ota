@@ -169,7 +169,9 @@ def get_transport(cfg, host_override=None, port_override=None, transport_overrid
             port = port_override or cfg.get('port', 2018)
             return WiFiTCPTransport(host, port)
         if name == 'serial':
-            port = host_override or cfg.get('serialPort') or _auto_serial()
+            port = _normalise_serial_port(
+                host_override or cfg.get('serialPort') or _auto_serial()
+            )
             baud = cfg.get('serialBaud', 115200)
             return SerialOTATransport(port, baud)
         if name == 'ble':
@@ -187,6 +189,13 @@ def _auto_serial():
         print('ERROR: No serial port found. Connect the device or set serialPort in ota.json.')
         sys.exit(1)
     return p
+
+
+def _normalise_serial_port(port):
+    """Prepend /dev/ on Linux/macOS if the user typed a bare name like ttyUSB0."""
+    if port and sys.platform != 'win32' and not port.startswith('/'):
+        return '/dev/' + port
+    return port
 
 
 # ── OTA push ──────────────────────────────────────────────────────────────────
@@ -441,7 +450,7 @@ def cmd_init(args, cfg):
 def cmd_bootstrap(args, cfg):
     from .bootstrap import run as do_bootstrap
     do_bootstrap(
-        port=args.port or cfg.get('serialPort'),
+        port=_normalise_serial_port(args.port or cfg.get('serialPort')),
         baud=args.baud,
         mpy=args.mpy,
     )
