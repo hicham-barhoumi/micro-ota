@@ -19,14 +19,17 @@ All connection params default to values in ota.json when not specified.
 
 import argparse
 import errno
+import hashlib
+import hmac as _hmac_mod
 import json
 import os
+import struct
 import sys
 import socket
 import time
 from pathlib import Path
 
-from .manifest import build as build_manifest, to_json as manifest_to_json, sign as sign_manifest
+from .manifest import build as build_manifest, to_json as manifest_to_json
 from .transports.wifi_tcp import WiFiTCPTransport
 from .transports.serial import SerialOTATransport
 
@@ -256,6 +259,116 @@ def send_ota(transport, files, manifest, wipe=False):
             print('\nOTA done in {:.1f}s  ({} files)'.format(elapsed, total_files))
 
 
+# ── binary stream OTA ─────────────────────────────────────────────────────────
+
+def _build_ota_stream(manifest, files, key=''):
+    """
+    Pack all files into a single binary OTA stream.
+
+    Wire format
+    -----------
+    [4B]  magic  b'OTAS'
+    [2B]  version_len  (big-endian)
+    [N]   version      (UTF-8)
+    [2B]  file_count   (big-endian)
+    ── repeated file_count times, in sorted path order ──
+    [2B]  path_len     (big-endian)
+    [N]   path         (UTF-8, relative, no leading /)
+    [4B]  file_size    (big-endian)
+    [32B] sha256       (binary)
+    [M]   file data
+    ─────────────────────────────────────────────────────
+    [32B] HMAC-SHA256 trailer  (covers everything from version_len
+          through end of last file; zeros if no key)
+    """
+    paths   = sorted(manifest['files'].keys())
+    version = manifest.get('version', 'unknown').encode('utf-8')
+
+    # body = everything the HMAC covers (version_len onward)
+    body = bytearray()
+    body += struct.pack('>H', len(version))
+    body += version
+    body += struct.pack('>H', len(paths))
+    for path in paths:
+        info   = manifest['files'][path]
+        path_b = path.encode('utf-8')
+        sha_b  = bytes.fromhex(info['sha256'])
+        body  += struct.pack('>H', len(path_b))
+        body  += path_b
+        body  += struct.pack('>I', info['size'])
+        body  += sha_b
+        with open(files[path], 'rb') as f:
+            body += f.read()
+
+    trailer = (_hmac_mod.new(key.encode(), bytes(body), hashlib.sha256).digest()
+               if key else b'\x00' * 32)
+
+    return b'OTAS' + bytes(body) + trailer
+
+
+def send_stream_ota(transport, files, manifest, key='', wipe=False):
+    """
+    Push files using the streaming binary protocol (stream_ota command).
+
+    Sends all files as one continuous payload — no per-file round-trips.
+    Each file is written to staging on the device as its bytes arrive.
+    Staging is committed atomically on success; discarded on any error.
+    """
+    stream = _build_ota_stream(manifest, files, key)
+    total  = len(stream)
+    nfiles = len(files)
+    start  = time.time()
+    print('Stream OTA: {} file{}  {:.1f} KB'.format(
+        nfiles, 's' if nfiles != 1 else '', total / 1024))
+
+    with transport:
+        if wipe:
+            transport.write_line('wipe')
+            resp = transport.read_line()
+            if resp.strip() != 'ok':
+                print('Wipe failed:', resp)
+                sys.exit(1)
+            print('Device wiped.')
+            transport.close()
+            time.sleep(1)
+            transport.connect()
+
+        transport.write_line('stream_ota {}'.format(total))
+        resp = transport.read_line()
+        if resp.strip() != 'ready':
+            print('Device not ready for stream_ota:', resp)
+            sys.exit(1)
+
+        sent   = 0
+        CHUNK  = 4096
+        t0     = time.time()
+        while sent < total:
+            chunk  = stream[sent:sent + CHUNK]
+            transport.write(chunk)
+            sent  += len(chunk)
+            elapsed = max(time.time() - t0, 0.001)
+            print('\r  {:>3}%  {:.1f}/{:.1f} KB  {:.1f} KB/s'.format(
+                sent * 100 // total,
+                sent / 1024, total / 1024,
+                (sent / 1024) / elapsed,
+            ), end='', flush=True)
+        print()
+
+        resp    = transport.read_line().strip()
+        elapsed = time.time() - start
+        if resp == 'ok':
+            print('Done in {:.1f}s'.format(elapsed))
+        elif resp == 'sig_mismatch':
+            print('ERROR: HMAC signature mismatch — update rejected')
+            sys.exit(1)
+        elif resp.startswith('sha256_mismatch'):
+            print('ERROR: file corruption —', resp)
+            sys.exit(1)
+        else:
+            print('ERROR:', resp)
+            sys.exit(1)
+
+
 # ── commands ──────────────────────────────────────────────────────────────────
 
 def cmd_init(args, cfg):
@@ -339,14 +452,10 @@ def cmd_fast(args, cfg):
     excludes  = cfg.get('excludedFiles', [])
     version   = args.version or cfg.get('version', 'unknown')
     manifest  = build_manifest(patterns, excludes, version)
-    key = cfg.get('otaKey', '')
-    if key:
-        manifest = sign_manifest(manifest, key)
-        print('Manifest signed (HMAC-SHA256).')
+    key       = cfg.get('otaKey', '')
     files     = {p: p for p in manifest['files']}
     transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None))
-    print('Fast OTA: {} file(s)'.format(len(files)))
-    send_ota(transport, files, manifest)
+    send_stream_ota(transport, files, manifest, key=key)
 
 
 def cmd_full(args, cfg):
@@ -354,14 +463,10 @@ def cmd_full(args, cfg):
     excludes  = cfg.get('excludedFiles', [])
     version   = args.version or cfg.get('version', 'unknown')
     manifest  = build_manifest(patterns, excludes, version)
-    key = cfg.get('otaKey', '')
-    if key:
-        manifest = sign_manifest(manifest, key)
-        print('Manifest signed (HMAC-SHA256).')
+    key       = cfg.get('otaKey', '')
     files     = {p: p for p in manifest['files']}
     transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None))
-    print('Full OTA: {} file(s){}'.format(len(files), '  [wipe first]' if args.wipe else ''))
-    send_ota(transport, files, manifest, wipe=args.wipe)
+    send_stream_ota(transport, files, manifest, key=key, wipe=args.wipe)
 
 
 def cmd_terminal(args, cfg):

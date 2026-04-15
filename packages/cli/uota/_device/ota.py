@@ -52,6 +52,35 @@ def _hmac_sha256_hex(key, msg):
     return ''.join('%02x' % b for b in outer.digest())
 
 
+class _HMACStream:
+    """
+    Incremental HMAC-SHA256.  Feed data chunk by chunk via update();
+    call digest() once at the end to get the 32-byte result.
+    Used to verify the stream_ota HMAC trailer without buffering the payload.
+    """
+    def __init__(self, key):
+        if isinstance(key, str):
+            key = key.encode()
+        B = 64
+        if len(key) > B:
+            h = hashlib.sha256()
+            h.update(key)
+            key = h.digest()
+        key = key + bytes(B - len(key))
+        self._opad  = bytes(b ^ 0x5C for b in key)
+        self._inner = hashlib.sha256()
+        self._inner.update(bytes(b ^ 0x36 for b in key))
+
+    def update(self, data):
+        self._inner.update(data)
+
+    def digest(self):
+        outer = hashlib.sha256()
+        outer.update(self._opad)
+        outer.update(self._inner.digest())
+        return bytes(outer.digest())
+
+
 def _signing_payload(manifest):
     """Same canonical form as the host: version\npath:sha256\n..."""
     lines = [manifest.get('version', '')]
@@ -282,6 +311,115 @@ def _commit(new_manifest, staged):
         print('[OTA] Committed version:', version)
 
 
+# ── streaming OTA session ────────────────────────────────────────────────────
+
+def _handle_stream_ota(conn, cfg):
+    """
+    Handle a stream_ota session.
+
+    Wire format (received after the 'ready' acknowledgement):
+      [4B]  magic  b'OTAS'
+      [2B]  version_len
+      [N]   version (UTF-8)
+      [2B]  file_count
+      ── file_count times ──
+      [2B]  path_len
+      [N]   path
+      [4B]  file_size
+      [32B] sha256  (binary)
+      [M]   file data   ← written to staging 512 B at a time, no full-file buffer
+      ──────────────────
+      [32B] HMAC-SHA256 trailer  (covers version_len..end-of-data; zeros = no auth)
+
+    Staging is discarded on any per-file sha256 mismatch or HMAC failure so
+    the device is never left in a partially-updated state.
+    """
+    _send(conn, 'ready\n')
+
+    magic = _read_exact(conn, 4)
+    if magic != b'OTAS':
+        _send(conn, 'error: bad magic\n')
+        return
+
+    key = cfg.get('otaKey', '')
+    hm  = _HMACStream(key) if key else None
+
+    def _ru16():
+        b = _read_exact(conn, 2)
+        if hm: hm.update(b)
+        return (b[0] << 8) | b[1]
+
+    def _ru32():
+        b = _read_exact(conn, 4)
+        if hm: hm.update(b)
+        return (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]
+
+    def _rn(n):
+        b = _read_exact(conn, n)
+        if hm: hm.update(b)
+        return b
+
+    # version
+    version = _rn(_ru16()).decode('utf-8', 'replace')
+
+    # file_count
+    file_count   = _ru16()
+    new_manifest = {'version': version, 'files': {}}
+    _remove_tree(_STAGE)
+
+    try:
+        for _ in range(file_count):
+            path     = _rn(_ru16()).decode('utf-8', 'replace')
+            size     = _ru32()
+            sha_b    = _rn(32)          # expected sha256 as 32 raw bytes
+
+            sp = _stage_path(path)
+            _makedirs('/'.join(sp.split('/')[:-1]))
+
+            fh  = hashlib.sha256()
+            rem = size
+            with open(sp, 'wb') as f:
+                while rem > 0:
+                    chunk = conn.recv(min(512, rem))
+                    if not chunk:
+                        raise OSError('connection dropped')
+                    f.write(chunk)
+                    fh.update(chunk)
+                    if hm: hm.update(chunk)
+                    rem -= len(chunk)
+
+            if bytes(fh.digest()) != sha_b:
+                _remove_tree(_STAGE)
+                _send(conn, 'sha256_mismatch ' + path + '\n')
+                print('[OTA] SHA256 mismatch:', path)
+                return
+
+            sha_hex = ''.join('%02x' % b for b in sha_b)
+            new_manifest['files'][path] = {'sha256': sha_hex, 'size': size}
+            print('[OTA] Staged:', path, '(%d B)' % size)
+
+        # verify HMAC trailer
+        trailer = _read_exact(conn, 32)
+        if hm and hm.digest() != trailer:
+            _remove_tree(_STAGE)
+            _send(conn, 'sig_mismatch\n')
+            print('[OTA] Stream HMAC mismatch — update rejected')
+            return
+
+        _commit(new_manifest, list(new_manifest['files'].keys()))
+        _send(conn, 'ok\n')
+        time.sleep(0.3)
+        machine.reset()
+
+    except Exception as e:
+        print('[OTA] Stream error:', e)
+        _remove_tree(_STAGE)
+        try:
+            _send(conn, 'error: ' + str(e) + '\n')
+        except Exception:
+            pass
+
+
 # ── command terminal ──────────────────────────────────────────────────────────
 
 def _handle(conn, cfg):
@@ -292,6 +430,9 @@ def _handle(conn, cfg):
 
     if cmd == b'ping':
         _send(conn, 'pong\n')
+
+    elif cmd == b'stream_ota':
+        _handle_stream_ota(conn, cfg)
 
     elif cmd == b'start_ota':
         _handle_ota(conn, cfg)

@@ -264,6 +264,27 @@ try:_G=json.load(open('/ota.json'))
 except:_G={}
 _ST='/ota_stage'
 _PR=frozenset(['lib','boot.py','ota.json','ota_manifest.json','ota_version.json','ota_boot_state.json'])
+def _commit(mf):
+ try:old=set(json.load(open('/ota_manifest.json')).get('files',{}).keys())
+ except:old=set()
+ for r in old-set(mf.get('files',{}).keys()):
+  try:os.remove('/'+r.lstrip('/'))
+  except:pass
+ pairs=[]
+ def _wk(d,a):
+  for e in os.listdir(d):
+   f=d+'/'+e
+   if _isdir(f):_wk(f,a)
+   else:a.append((f,f[len(_ST):]))
+ if _isdir(_ST):_wk(_ST,pairs)
+ for sp,fp in pairs:
+  _mkd('/'.join(fp.split('/')[:-1]))
+  try:os.remove(fp)
+  except:pass
+  os.rename(sp,fp)
+ _rmt(_ST)
+ with open('/ota_manifest.json','w')as f:json.dump(mf,f)
+ with open('/ota_version.json','w')as f:json.dump({'version':mf.get('version','unknown')},f)
 def _ota(c):
  _s(c,'ready\n');mf=None
  try:
@@ -271,28 +292,7 @@ def _ota(c):
    h=_rl(c);ps=h.split(b' ',1);cmd=ps[0];arg=ps[1].decode()if len(ps)>1 else''
    if cmd==b'abort':_rmt(_ST);_s(c,'aborted\n');return
    if cmd==b'end_ota':
-    if mf:
-     try:old=set(json.load(open('/ota_manifest.json')).get('files',{}).keys())
-     except:old=set()
-     for r in old-set(mf.get('files',{}).keys()):
-      try:os.remove('/'+r.lstrip('/'))
-      except:pass
-     def _wk(d,acc):
-      for e in os.listdir(d):
-       f=d+'/'+e
-       if _isdir(f):_wk(f,acc)
-       else:acc.append((f,f[len(_ST):]))
-     if _isdir(_ST):
-      pairs=[]
-      _wk(_ST,pairs)
-      for sp,fp in pairs:
-       _mkd('/'.join(fp.split('/')[:-1]))
-       try:os.remove(fp)
-       except:pass
-       os.rename(sp,fp)
-     _rmt(_ST)
-     with open('/ota_manifest.json','w')as f:json.dump(mf,f)
-     with open('/ota_version.json','w')as f:json.dump({'version':mf.get('version','unknown')},f)
+    if mf:_commit(mf)
     _s(c,'ok\n');time.sleep(0.3);machine.reset();return
    if cmd==b'manifest':
     mf=json.loads(_re(c,int(arg)))
@@ -314,9 +314,67 @@ def _ota(c):
   _rmt(_ST)
   try:_s(c,'error: '+str(e)+'\n')
   except:pass
+class _HS:
+ def __init__(self,k):
+  if isinstance(k,str):k=k.encode()
+  B=64
+  if len(k)>B:h=hashlib.sha256();h.update(k);k=h.digest()
+  k=k+bytes(B-len(k))
+  self._op=bytes(b^0x5C for b in k)
+  self._inn=hashlib.sha256()
+  self._inn.update(bytes(b^0x36 for b in k))
+ def update(self,d):self._inn.update(d)
+ def digest(self):
+  o=hashlib.sha256();o.update(self._op);o.update(self._inn.digest())
+  return bytes(o.digest())
+def _soa(c):
+ _s(c,'ready\n')
+ if _re(c,4)!=b'OTAS':_s(c,'error: bad magic\n');return
+ key=_G.get('otaKey','')
+ hm=_HS(key)if key else None
+ def _ru(n,sz):
+  b=_re(c,n)
+  if hm:hm.update(b)
+  r=0
+  for x in b:r=(r<<8)|x
+  return r
+ def _rb(n):
+  b=_re(c,n)
+  if hm:hm.update(b)
+  return b
+ version=_rb(_ru(2,0)).decode()
+ fc=_ru(2,0)
+ mf={'version':version,'files':{}}
+ _rmt(_ST)
+ try:
+  for _ in range(fc):
+   path=_rb(_ru(2,0)).decode()
+   sz=_ru(4,0)
+   sha_b=_rb(32)
+   sp=_ST+'/'+path.lstrip('/')
+   _mkd('/'.join(sp.split('/')[:-1]))
+   fh=hashlib.sha256();rem=sz
+   with open(sp,'wb')as f:
+    while rem>0:
+     x=c.recv(min(512,rem))
+     f.write(x);fh.update(x)
+     if hm:hm.update(x)
+     rem-=len(x)
+   if bytes(fh.digest())!=sha_b:_rmt(_ST);_s(c,'sha256_mismatch '+path+'\n');return
+   mf['files'][path]={'sha256':''.join('%02x'%b for b in sha_b),'size':sz}
+  trail=_re(c,32)
+  if hm and hm.digest()!=trail:_rmt(_ST);_s(c,'sig_mismatch\n');return
+  _commit(mf)
+ except Exception as e:
+  _rmt(_ST)
+  try:_s(c,'error: '+str(e)+'\n')
+  except:pass
+  return
+ _s(c,'ok\n');time.sleep(0.3);machine.reset()
 def _h(c):
  line=_rl(c);ps=line.split(b' ',1);cmd=ps[0];arg=ps[1].decode().strip()if len(ps)>1 else''
  if cmd==b'ping':_s(c,'pong\n')
+ elif cmd==b'stream_ota':_soa(c)
  elif cmd==b'start_ota':_ota(c)
  elif cmd==b'version':
   try:_s(c,open('/ota_version.json').read()+'\n')
