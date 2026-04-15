@@ -100,9 +100,21 @@ class RawREPL:
         self._ser.flush()
 
         # Response: b'OK' + stdout + b'\x04' + stderr + b'\x04'
-        header = self._ser.read(2)
-        if header != b'OK':
-            raise RuntimeError('Raw REPL did not respond OK, got: ' + repr(header))
+        # Background threads (OTA, RemoteIO) may write to the UART concurrently
+        # and their output can arrive before the raw REPL 'OK'.  Scan forward
+        # until we find 'OK' rather than assuming it starts at byte 0.
+        buf = bytearray()
+        t0 = time.time()
+        found = False
+        while time.time() - t0 < self.timeout:
+            c = self._ser.read(1)
+            if c:
+                buf.extend(c)
+                if len(buf) >= 2 and buf[-2:] == b'OK':
+                    found = True
+                    break
+        if not found:
+            raise RuntimeError('Raw REPL did not respond OK, got: ' + repr(bytes(buf)))
 
         out = self._read_until(b'\x04')
         err = self._read_until(b'\x04')
@@ -263,7 +275,14 @@ def _vsig(mf,key):
 try:_G=json.load(open('/ota.json'))
 except:_G={}
 _ST='/ota_stage'
-_PR=frozenset(['lib','boot.py','ota.json','ota_manifest.json','ota_version.json','ota_boot_state.json'])
+_PR=frozenset([
+ # new /lib/-based layout (post-bootstrap)
+ 'lib',
+ # legacy root-level layout (pre-bootstrap / old firmware)
+ 'ota.py','boot_guard.py','remoteio.py','transports',
+ # always-protected
+ 'boot.py','ota.json','ota_manifest.json','ota_version.json','ota_boot_state.json',
+])
 def _commit(mf):
  try:old=set(json.load(open('/ota_manifest.json')).get('files',{}).keys())
  except:old=set()
@@ -425,14 +444,21 @@ class SerialOTATransport:
         self._ser = serial.Serial(self.port, self.baud, timeout=self.timeout)
         time.sleep(0.5)
 
-        # Interrupt any running code and flush
+        # Interrupt any running code.
+        # Send Ctrl+C twice to kill any executing code, then Ctrl+B to exit
+        # raw REPL in case the device was left in raw REPL mode by a previous
+        # session (Ctrl+A does nothing when already in raw REPL, so we must
+        # normalise the state first).
         self._ser.write(b'\r\x03\x03')
         self._ser.flush()
         time.sleep(0.3)
+        self._ser.write(b'\x02')       # Ctrl+B: exit raw REPL → normal REPL
+        self._ser.flush()
+        time.sleep(0.1)
         self._ser.reset_input_buffer()
 
         # Enter raw REPL
-        self._ser.write(b'\x01')
+        self._ser.write(b'\x01')       # Ctrl+A: enter raw REPL
         self._ser.flush()
         time.sleep(0.2)
         banner = self._ser.read(200)
@@ -447,11 +473,24 @@ class SerialOTATransport:
         self._ser.write(b'\x04')   # Ctrl+D: execute
         self._ser.flush()
 
-        # Raw REPL replies 'OK' when code starts executing
-        header = self._ser.read(2)
-        if header != b'OK':
+        # Raw REPL sends 'OK' synchronously when it starts executing the code.
+        # Background threads (OTA, RemoteIO) started by boot.py keep running
+        # and may write to the UART concurrently — their output arrives in the
+        # input buffer mixed with the raw REPL 'OK'.  Scan forward until we
+        # see the 'OK' byte pair rather than assuming it is at position 0.
+        buf = bytearray()
+        t0 = time.time()
+        found = False
+        while time.time() - t0 < 5:
+            c = self._ser.read(1)
+            if c:
+                buf.extend(c)
+                if len(buf) >= 2 and buf[-2:] == b'OK':
+                    found = True
+                    break
+        if not found:
             raise RuntimeError(
-                'Inline OTA server failed to start. Got: ' + repr(header)
+                'Inline OTA server failed to start. Got: ' + repr(bytes(buf))
             )
 
     def close(self):

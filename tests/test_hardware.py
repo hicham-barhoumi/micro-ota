@@ -156,9 +156,10 @@ def test_serial_version():
 def test_serial_ls_root():
     lines = send_ls(serial(), '/')
     joined = '\n'.join(lines)
-    assert 'ota.py'        in joined, 'ota.py missing: '        + repr(lines)
-    assert 'boot_guard.py' in joined, 'boot_guard.py missing: ' + repr(lines)
-    assert 'boot.py'       in joined, 'boot.py missing: '       + repr(lines)
+    assert 'boot.py' in joined, 'boot.py missing: ' + repr(lines)
+    # OTA library lives in /lib/ (new layout) or at root (legacy layout)
+    ota_present = 'ota.py' in joined or 'lib' in joined
+    assert ota_present, 'OTA library (ota.py or lib/) missing: ' + repr(lines)
 
 
 @skip_if_no_serial
@@ -225,11 +226,22 @@ def test_serial_wipe_keeps_ota_lib():
     send_cmd(serial(), 'wipe')
     time.sleep(2)
 
-    lines = send_ls(serial(), '/')
-    joined = '\n'.join(lines)
-    assert 'ota.py'        in joined, 'ota.py missing after wipe'
-    assert 'boot_guard.py' in joined, 'boot_guard.py missing after wipe'
-    assert 'transports'    in joined, 'transports missing after wipe'
+    root_lines = send_ls(serial(), '/')
+    root_joined = '\n'.join(root_lines)
+
+    # New /lib/ layout (post-bootstrap): OTA files live in /lib/
+    if 'lib' in root_joined:
+        lib_lines  = send_ls(serial(), '/lib')
+        lib_joined = '\n'.join(lib_lines)
+        assert 'ota.py' in lib_joined or 'ota.mpy' in lib_joined, \
+            'ota.py missing from /lib after wipe: ' + repr(lib_lines)
+        assert 'boot_guard' in lib_joined, \
+            'boot_guard missing from /lib after wipe: ' + repr(lib_lines)
+    else:
+        # Legacy root-level layout (pre-bootstrap)
+        assert 'ota.py'        in root_joined, 'ota.py missing after wipe: '        + repr(root_lines)
+        assert 'boot_guard.py' in root_joined, 'boot_guard.py missing after wipe: ' + repr(root_lines)
+        assert 'transports'    in root_joined, 'transports missing after wipe: '    + repr(root_lines)
 
 # ── wifi tests ────────────────────────────────────────────────────────────────
 
