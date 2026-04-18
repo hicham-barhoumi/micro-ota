@@ -608,7 +608,7 @@ class OTAUpdater:
         for name in cfg.get('transports', ['wifi_tcp']):
             try:
                 if name == 'wifi_tcp':
-                    from transports.wifi_tcp import WiFiTCPTransport
+                    from .transports.wifi_tcp import WiFiTCPTransport
                     result.append(WiFiTCPTransport(
                         ssid=cfg.get('ssid', ''),
                         password=cfg.get('password', ''),
@@ -616,7 +616,7 @@ class OTAUpdater:
                         port=cfg.get('port', 2018),
                     ))
                 elif name == 'serial':
-                    from transports.serial import SerialTransport
+                    from .transports.serial import SerialTransport
                     result.append(SerialTransport(
                         uart_id=cfg.get('serialUartId', 1),
                         baud=cfg.get('serialBaud', 115200),
@@ -628,14 +628,14 @@ class OTAUpdater:
                     if not url:
                         print('[OTA] http_pull requires manifestUrl in ota.json')
                         continue
-                    from transports.http_pull import HttpPullTransport
+                    from .transports.http_pull import HttpPullTransport
                     result.append(HttpPullTransport(
                         manifest_url=url,
                         interval=cfg.get('pullInterval', 60),
                         timeout=cfg.get('pullTimeout', 15),
                     ))
                 elif name == 'ble':
-                    from transports.ble import BLETransport
+                    from .transports.ble import BLETransport
                     result.append(BLETransport(
                         name=cfg.get('bleName', 'micro-ota'),
                     ))

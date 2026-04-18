@@ -265,8 +265,8 @@ class SerialOTATransport:
 
         # Fast path: invoke ota.serve_serial() already on the device.
         # This avoids injecting ~13 KB of inline server code on every call.
-        # Falls back to the inline server when ota.py is absent (bootstrap).
-        self._ser.write(b'import ota; ota.serve_serial()')
+        # Falls back to the inline server when uota is absent (bootstrap).
+        self._ser.write(b'from uota.ota import serve_serial as _s; _s()')
         self._ser.write(b'\x04')   # Ctrl+D: execute
         self._ser.flush()
 
