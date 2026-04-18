@@ -483,6 +483,94 @@ def _handle(conn, cfg):
         _send(conn, 'unknown\n')
 
 
+# ── serial REPL entry point ───────────────────────────────────────────────────
+
+def serve_serial():
+    """
+    Serve the OTA protocol over UART0 (the USB / REPL port) when the host
+    enters raw REPL and runs:  import ota; ota.serve_serial()
+
+    Provides the same ACK-based flow control and escape decoding as the
+    inline server injected during bootstrap, but re-uses all the protocol
+    handlers already in this module instead of duplicating them.
+
+    The host's SerialOTATransport.connect() tries this first; it falls back
+    to injecting _inline_server.py only when ota.py is absent (un-bootstrapped
+    device or very old firmware).
+    """
+    import sys
+    import uselect
+
+    try:
+        _out = sys.stdout.buffer
+        _in  = sys.stdin.buffer
+    except AttributeError:
+        _out = sys.stdout
+        _in  = sys.stdin
+
+    # Suppress print() so device debug lines don't corrupt the binary protocol.
+    # _out already points at the raw UART buffer — writes go directly to wire.
+    class _Null:
+        def write(self, *a): pass
+        def flush(self, *a): pass
+    sys.stdout = _Null()
+
+    _poll = uselect.poll()
+    _poll.register(_in, uselect.POLLIN)
+    _ACK = b'\x06'
+    _ESC = 27
+
+    class _Conn:
+        def _read1(self, tms=100):
+            if _poll.poll(0):          # byte ready — fast path, no ACK
+                b = _in.read(1)
+                if b:
+                    return b[0]
+            # Buffer empty — tell host to send the next window, then wait.
+            _out.write(_ACK)
+            try: _out.flush()
+            except: pass
+            if not _poll.poll(tms): raise OSError('recv timeout')
+            b = _in.read(1)
+            if not b: raise OSError('recv timeout')
+            return b[0]
+
+        def recv(self, n):
+            buf = bytearray(n)
+            for i in range(n):
+                b = self._read1()
+                if b == _ESC:
+                    nx = self._read1(500)
+                    b = 3 if nx == ord('C') else 4 if nx == ord('D') else nx
+                buf[i] = b
+            return bytes(buf)
+
+        def sendall(self, data):
+            if isinstance(data, str):
+                data = data.encode('latin-1')
+            _out.write(data)
+            try: _out.flush()
+            except: pass
+
+        def close(self): pass
+
+    cfg = {}
+    try:
+        cfg = json.load(open('/ota.json'))
+    except Exception:
+        pass
+
+    while True:
+        try:
+            _handle(_Conn(), cfg)
+        except Exception as e:
+            try:
+                _out.write(('[ERR] ' + str(e) + '\n').encode())
+                _out.flush()
+            except Exception:
+                pass
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 class OTAUpdater:

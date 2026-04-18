@@ -199,16 +199,14 @@ class RawREPL:
 
 # ── SerialOTATransport ────────────────────────────────────────────────────────
 
-# Self-contained inline OTA server injected into the device via raw REPL.
-# Source is in _inline_server.py (same directory) for syntax highlighting.
+# Fallback inline OTA server — injected only when ota.py is absent on the
+# device (bootstrap flow or un-bootstrapped device).  Source lives in
+# _inline_server.py for syntax highlighting and independent testing.
 #
-# Deliberately does NOT import from the device's /lib/ota.py so it works on:
-#   • un-bootstrapped devices (ota.py not yet installed)
-#   • devices with an older ota.py that has a different _handle() signature
-#
-# Uses sys.stdout.buffer / sys.stdin.buffer for raw binary access, bypassing
-# the raw-REPL output capture (writes go straight to the UART).
-# Falls back to text-mode streams on older MicroPython builds.
+# On bootstrapped devices SerialOTATransport.connect() instead invokes
+#   import ota; ota.serve_serial()
+# which re-uses all the protocol handlers already in ota.py without uploading
+# any extra code.
 _INLINE_SERVER = (pathlib.Path(__file__).parent / '_inline_server.py').read_text()
 
 
@@ -219,10 +217,13 @@ class SerialOTATransport:
     Usage is identical to WiFiTCPTransport — connect() / read_line() /
     write_line() / read_exact() / write() / close().
 
-    connect() enters raw REPL, executes the inline OTA server on the
-    device, and verifies readiness. After that the caller speaks the
-    normal micro-ota protocol over the serial port.
+    connect() enters raw REPL then:
+      1. Tries  import ota; ota.serve_serial()  (fast — no code upload needed
+         on already-bootstrapped devices).
+      2. Falls back to injecting the self-contained _inline_server.py when
+         ota.py is absent (un-bootstrapped device or bootstrap itself).
 
+    After connect() returns, the caller speaks the normal micro-ota protocol.
     close() sends Ctrl-C + Ctrl-B to restore the interactive REPL.
     """
 
@@ -262,30 +263,42 @@ class SerialOTATransport:
                 '\nCheck port/baud or press Reset on the device.'
             )
 
-        # Inject inline OTA server
-        self._ser.write(_INLINE_SERVER.encode())
+        # Fast path: invoke ota.serve_serial() already on the device.
+        # This avoids injecting ~13 KB of inline server code on every call.
+        # Falls back to the inline server when ota.py is absent (bootstrap).
+        self._ser.write(b'import ota; ota.serve_serial()')
         self._ser.write(b'\x04')   # Ctrl+D: execute
         self._ser.flush()
 
-        # Raw REPL sends 'OK' synchronously when it starts executing the code.
-        # Background threads (OTA, RemoteIO) started by boot.py keep running
-        # and may write to the UART concurrently — their output arrives in the
-        # input buffer mixed with the raw REPL 'OK'.  Scan forward until we
-        # see the 'OK' byte pair rather than assuming it is at position 0.
+        if not self._wait_for_ok(timeout=5):
+            raise RuntimeError('Raw REPL did not respond OK during connect.')
+
+        # If ota.py is missing, raw REPL immediately sends \x04 (end-of-stdout)
+        # followed by the ImportError in stderr.  If serve_serial() is running,
+        # it enters its loop and sends no \x04 — only \x06 ACK bytes.
+        # Peek for 0.2 s: a \x04 means failure → fall back to inline server.
+        time.sleep(0.2)
+        peeked = self._ser.read(self._ser.in_waiting)   # non-blocking peek
+        if b'\x04' in peeked:
+            # Device still in raw REPL — inject self-contained inline server.
+            self._ser.reset_input_buffer()
+            self._ser.write(_INLINE_SERVER.encode())
+            self._ser.write(b'\x04')
+            self._ser.flush()
+            if not self._wait_for_ok(timeout=5):
+                raise RuntimeError('Inline OTA server failed to start.')
+
+    def _wait_for_ok(self, timeout=5):
+        """Scan the serial stream until the raw REPL 'OK' pair appears."""
         buf = bytearray()
         t0 = time.time()
-        found = False
-        while time.time() - t0 < 5:
+        while time.time() - t0 < timeout:
             c = self._ser.read(1)
             if c:
                 buf.extend(c)
                 if len(buf) >= 2 and buf[-2:] == b'OK':
-                    found = True
-                    break
-        if not found:
-            raise RuntimeError(
-                'Inline OTA server failed to start. Got: ' + repr(bytes(buf))
-            )
+                    return True
+        return False
 
     def close(self):
         if self._ser and self._ser.is_open:
