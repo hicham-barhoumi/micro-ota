@@ -9,6 +9,7 @@ SerialOTATransport — OTA over USB/UART0 via raw REPL injection.
 """
 
 import base64
+import pathlib
 import time
 import serial
 import serial.tools.list_ports
@@ -77,14 +78,14 @@ class RawREPL:
         self._ser.write(b'\x01')   # Ctrl+A
         self._ser.flush()
         time.sleep(0.1)
-        data = self._ser.read(200)
+        data = self._ser.read(self._ser.in_waiting or 1)
         if b'raw REPL' not in data:
             # Try once more after another interrupt
             self._interrupt()
             self._ser.write(b'\x01')
             self._ser.flush()
             time.sleep(0.2)
-            data = self._ser.read(200)
+            data = self._ser.read(self._ser.in_waiting or 1)
             if b'raw REPL' not in data:
                 raise RuntimeError(
                     'Could not enter raw REPL. Got: ' + repr(data) +
@@ -199,6 +200,7 @@ class RawREPL:
 # ── SerialOTATransport ────────────────────────────────────────────────────────
 
 # Self-contained inline OTA server injected into the device via raw REPL.
+# Source is in _inline_server.py (same directory) for syntax highlighting.
 #
 # Deliberately does NOT import from the device's /lib/ota.py so it works on:
 #   • un-bootstrapped devices (ota.py not yet installed)
@@ -207,215 +209,7 @@ class RawREPL:
 # Uses sys.stdout.buffer / sys.stdin.buffer for raw binary access, bypassing
 # the raw-REPL output capture (writes go straight to the UART).
 # Falls back to text-mode streams on older MicroPython builds.
-_INLINE_SERVER = r"""
-import sys,os,json,hashlib,machine,time
-try:_O=sys.stdout.buffer;_I=sys.stdin.buffer
-except:_O=sys.stdout;_I=sys.stdin
-class _C:
- def recv(self,n):
-  b=b''
-  while len(b)<n:
-   c=_I.read(1)
-   if not c:raise OSError('eof')
-   if isinstance(c,str):c=c.encode('latin-1')
-   b+=c
-  return b
- def sendall(self,d):
-  if isinstance(d,str):d=d.encode('latin-1')
-  _O.write(d)
-  try:_O.flush()
-  except:pass
- def close(self):pass
-def _rl(c):
- b=bytearray()
- while True:
-  x=c.recv(1)
-  if x==b'\n':break
-  if x!=b'\r':b.extend(x)
- return bytes(b)
-def _re(c,n):
- b=bytearray(n);mv=memoryview(b);p=0
- while p<n:
-  x=c.recv(min(512,n-p));mv[p:p+len(x)]=x;p+=len(x)
- return bytes(b)
-def _s(c,m):
- if isinstance(m,str):m=m.encode()
- c.sendall(m)
-def _isdir(p):
- try:return os.stat(p)[0]&0x4000!=0
- except:return False
-def _mkd(p):
- cur=''
- for x in[v for v in p.split('/')if v]:
-  cur+='/'+x
-  try:os.mkdir(cur)
-  except:pass
-def _rmt(p):
- try:
-  if _isdir(p):
-   for e in os.listdir(p):_rmt(p+'/'+e)
-   os.rmdir(p)
-  else:os.remove(p)
- except:pass
-def _hmac(k,m):
- if isinstance(k,str):k=k.encode()
- if isinstance(m,str):m=m.encode()
- B=64
- if len(k)>B:h=hashlib.sha256();h.update(k);k=h.digest()
- k=k+bytes(B-len(k))
- ip=bytes(b^0x36 for b in k);op=bytes(b^0x5C for b in k)
- i=hashlib.sha256();i.update(ip);i.update(m)
- o=hashlib.sha256();o.update(op);o.update(i.digest())
- return ''.join('%02x'%b for b in o.digest())
-def _vsig(mf,key):
- if not key:return True
- ls=[mf.get('version','')]
- for p in sorted(mf.get('files',{})):ls.append('{}:{}'.format(p,mf['files'][p]['sha256']))
- return mf.get('sig','')==_hmac(key,'\n'.join(ls))
-try:_G=json.load(open('/ota.json'))
-except:_G={}
-_ST='/ota_stage'
-_PR=frozenset([
- # new /lib/-based layout (post-bootstrap)
- 'lib',
- # legacy root-level layout (pre-bootstrap / old firmware)
- 'ota.py','boot_guard.py','remoteio.py','transports',
- # always-protected
- 'boot.py','ota.json','ota_manifest.json','ota_version.json','ota_boot_state.json',
-])
-def _commit(mf):
- try:old=set(json.load(open('/ota_manifest.json')).get('files',{}).keys())
- except:old=set()
- for r in old-set(mf.get('files',{}).keys()):
-  try:os.remove('/'+r.lstrip('/'))
-  except:pass
- pairs=[]
- def _wk(d,a):
-  for e in os.listdir(d):
-   f=d+'/'+e
-   if _isdir(f):_wk(f,a)
-   else:a.append((f,f[len(_ST):]))
- if _isdir(_ST):_wk(_ST,pairs)
- for sp,fp in pairs:
-  _mkd('/'.join(fp.split('/')[:-1]))
-  try:os.remove(fp)
-  except:pass
-  os.rename(sp,fp)
- _rmt(_ST)
- with open('/ota_manifest.json','w')as f:json.dump(mf,f)
- with open('/ota_version.json','w')as f:json.dump({'version':mf.get('version','unknown')},f)
-def _ota(c):
- _s(c,'ready\n');mf=None
- try:
-  while True:
-   h=_rl(c);ps=h.split(b' ',1);cmd=ps[0];arg=ps[1].decode()if len(ps)>1 else''
-   if cmd==b'abort':_rmt(_ST);_s(c,'aborted\n');return
-   if cmd==b'end_ota':
-    if mf:_commit(mf)
-    _s(c,'ok\n');time.sleep(0.3);machine.reset();return
-   if cmd==b'manifest':
-    mf=json.loads(_re(c,int(arg)))
-    if not _vsig(mf,_G.get('otaKey','')):_rmt(_ST);_s(c,'sig_mismatch\n');return
-    _s(c,'ok\n')
-   elif cmd==b'file':
-    meta=arg.split(';');fn=meta[0];sz=int(meta[1]);ex=meta[2]if len(meta)>2 else None
-    sp=_ST+'/'+fn.lstrip('/')
-    _mkd('/'.join(sp.split('/')[:-1]))
-    h=hashlib.sha256();rem=sz
-    with open(sp,'wb')as f:
-     while rem>0:
-      x=c.recv(min(512,rem));f.write(x);h.update(x);rem-=len(x)
-    act=''.join('%02x'%b for b in h.digest())
-    if ex and act!=ex:os.remove(sp);_s(c,'sha256_mismatch '+fn+'\n');raise OSError('sha256 mismatch: '+fn)
-    _s(c,'ok\n')
-   else:_s(c,'unknown\n')
- except Exception as e:
-  _rmt(_ST)
-  try:_s(c,'error: '+str(e)+'\n')
-  except:pass
-class _HS:
- def __init__(self,k):
-  if isinstance(k,str):k=k.encode()
-  B=64
-  if len(k)>B:h=hashlib.sha256();h.update(k);k=h.digest()
-  k=k+bytes(B-len(k))
-  self._op=bytes(b^0x5C for b in k)
-  self._inn=hashlib.sha256()
-  self._inn.update(bytes(b^0x36 for b in k))
- def update(self,d):self._inn.update(d)
- def digest(self):
-  o=hashlib.sha256();o.update(self._op);o.update(self._inn.digest())
-  return bytes(o.digest())
-def _soa(c):
- _s(c,'ready\n')
- if _re(c,4)!=b'OTAS':_s(c,'error: bad magic\n');return
- key=_G.get('otaKey','')
- hm=_HS(key)if key else None
- def _ru(n,sz):
-  b=_re(c,n)
-  if hm:hm.update(b)
-  r=0
-  for x in b:r=(r<<8)|x
-  return r
- def _rb(n):
-  b=_re(c,n)
-  if hm:hm.update(b)
-  return b
- version=_rb(_ru(2,0)).decode()
- fc=_ru(2,0)
- mf={'version':version,'files':{}}
- _rmt(_ST)
- try:
-  for _ in range(fc):
-   path=_rb(_ru(2,0)).decode()
-   sz=_ru(4,0)
-   sha_b=_rb(32)
-   sp=_ST+'/'+path.lstrip('/')
-   _mkd('/'.join(sp.split('/')[:-1]))
-   fh=hashlib.sha256();rem=sz
-   with open(sp,'wb')as f:
-    while rem>0:
-     x=c.recv(min(512,rem))
-     f.write(x);fh.update(x)
-     if hm:hm.update(x)
-     rem-=len(x)
-   if bytes(fh.digest())!=sha_b:_rmt(_ST);_s(c,'sha256_mismatch '+path+'\n');return
-   mf['files'][path]={'sha256':''.join('%02x'%b for b in sha_b),'size':sz}
-  trail=_re(c,32)
-  if hm and hm.digest()!=trail:_rmt(_ST);_s(c,'sig_mismatch\n');return
-  _commit(mf)
- except Exception as e:
-  _rmt(_ST)
-  try:_s(c,'error: '+str(e)+'\n')
-  except:pass
-  return
- _s(c,'ok\n');time.sleep(0.3);machine.reset()
-def _h(c):
- line=_rl(c);ps=line.split(b' ',1);cmd=ps[0];arg=ps[1].decode().strip()if len(ps)>1 else''
- if cmd==b'ping':_s(c,'pong\n')
- elif cmd==b'stream_ota':_soa(c)
- elif cmd==b'start_ota':_ota(c)
- elif cmd==b'version':
-  try:_s(c,open('/ota_version.json').read()+'\n')
-  except:_s(c,'{"version":"unknown"}\n')
- elif cmd==b'ls':
-  try:_s(c,'\n'.join(os.listdir(arg or '/'))+'\n')
-  except:_s(c,'error\n')
- elif cmd==b'get':
-  try:d=open(arg,'rb').read();_s(c,str(len(d))+'\n');_s(c,d)
-  except:_s(c,'error\n')
- elif cmd==b'rm':
-  try:os.remove(arg);_s(c,'ok\n')
-  except:_s(c,'error\n')
- elif cmd==b'reset':
-  _s(c,'ok\n');time.sleep(0.3);machine.reset()
- elif cmd==b'wipe':
-  for item in os.listdir('/'):
-   if item not in _PR:_rmt('/'+item)
-  _s(c,'ok\n')
- else:_s(c,'unknown\n')
-while True:_h(_C())
-"""
+_INLINE_SERVER = (pathlib.Path(__file__).parent / '_inline_server.py').read_text()
 
 
 class SerialOTATransport:
@@ -461,7 +255,7 @@ class SerialOTATransport:
         self._ser.write(b'\x01')       # Ctrl+A: enter raw REPL
         self._ser.flush()
         time.sleep(0.2)
-        banner = self._ser.read(200)
+        banner = self._ser.read(self._ser.in_waiting or 1)
         if b'raw REPL' not in banner:
             raise RuntimeError(
                 'Could not enter raw REPL. Got: ' + repr(banner) +
@@ -507,13 +301,14 @@ class SerialOTATransport:
     # ── protocol primitives ───────────────────────────────────────────────────
 
     def read_line(self):
-        while True:
+        deadline = time.time() + (getattr(self._ser, 'timeout', self.timeout) or self.timeout) * 3
+        while time.time() < deadline:
             buf = bytearray()
             while True:
                 c = self._ser.read(1)
                 if not c or c == b'\n':
                     break
-                if c != b'\r':
+                if c not in (b'\r', b'\x06'):  # \x06 = flow-control ACK
                     buf.extend(c)
             line = buf.decode(errors='replace')
             # Skip device debug output (e.g. "[OTA] Manifest: 1 files").
@@ -522,6 +317,7 @@ class SerialOTATransport:
             # are plain words or JSON — they never start with '['.
             if not line.startswith('['):
                 return line
+        return ''
 
     def read_exact(self, n):
         buf = bytearray()
@@ -535,6 +331,13 @@ class SerialOTATransport:
     def write(self, data):
         if isinstance(data, str):
             data = data.encode()
+        # Escape bytes MicroPython's UART IRQ intercepts during execution:
+        #   \x03 → \x1bC  (Ctrl+C → KeyboardInterrupt at hardware level)
+        #   \x04 → \x1bD  (Ctrl+D = EOF, may terminate stdin.read)
+        #   \x1b → \x1b\x1b  (escape byte itself — must be done first)
+        data = (data.replace(b'\x1b', b'\x1b\x1b')
+                    .replace(b'\x03', b'\x1bC')
+                    .replace(b'\x04', b'\x1bD'))
         self._ser.write(data)
         self._ser.flush()
 
