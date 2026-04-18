@@ -12,7 +12,7 @@
     "manifestUrl": "",
     "pullInterval": 60,
     "excludedFiles": [
-        ".git/**", "device/**", "*.zip", "dist/**"
+        ".git/**", "lib/uota/**", "*.zip", "dist/**"
     ],
     "fastOtaFiles": ["main.py"],
     "fullOtaFiles": ["*.py", "lib/**", "*.json"]

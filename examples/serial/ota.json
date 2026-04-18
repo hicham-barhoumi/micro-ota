@@ -1,0 +1,11 @@
+{
+    "version": "1.0.0",
+    "otaKey": "",
+    "serialPort": "",
+    "transports": ["serial"],
+    "excludedFiles": [
+        ".git/**", "lib/uota/**", "*.zip", "dist/**"
+    ],
+    "fastOtaFiles": ["main.py"],
+    "fullOtaFiles": ["*.py", "lib/**", "*.json"]
+}
