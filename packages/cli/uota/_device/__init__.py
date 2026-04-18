@@ -1,15 +1,5 @@
-"""
-uota — micro-ota device package.
-
-Installed to /lib/uota/ on the device.  Import the main entry point with:
-
-    from uota.ota import OTAUpdater
-
-or use the convenience re-exports from this package:
-
-    from uota import OTAUpdater
-"""
-
-from .ota import OTAUpdater
-from . import boot_guard
-from . import remoteio
+# uota — micro-ota device package marker.
+# Intentionally empty: MicroPython resolves submodule imports
+# (from uota.ota import OTAUpdater, from uota import boot_guard, ...)
+# directly from the filesystem without requiring re-exports here.
+# Eager imports would overflow the thread stack on ESP32.
