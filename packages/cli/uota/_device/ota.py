@@ -508,12 +508,17 @@ def serve_serial():
         _out = sys.stdout
         _in  = sys.stdin
 
-    # Suppress print() so device debug lines don't corrupt the binary protocol.
-    # _out already points at the raw UART buffer — writes go directly to wire.
+    # Best-effort: suppress print() so device debug lines don't reach the wire.
+    # On builds where sys is a frozen/read-only module, the assignment silently
+    # fails — that's fine because the host's read_line() already skips lines
+    # that start with '[' (e.g. "[OTA] Staged: ...").
     class _Null:
         def write(self, *a): pass
         def flush(self, *a): pass
-    sys.stdout = _Null()
+    try:
+        sys.stdout = _Null()
+    except AttributeError:
+        pass
 
     _poll = uselect.poll()
     _poll.register(_in, uselect.POLLIN)
