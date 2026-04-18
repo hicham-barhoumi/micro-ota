@@ -508,17 +508,27 @@ def serve_serial():
         _out = sys.stdout
         _in  = sys.stdin
 
-    # Best-effort: suppress print() so device debug lines don't reach the wire.
-    # On builds where sys is a frozen/read-only module, the assignment silently
-    # fails — that's fine because the host's read_line() already skips lines
-    # that start with '[' (e.g. "[OTA] Staged: ...").
+    # Best-effort: suppress print() so device debug lines don't corrupt the
+    # binary protocol.  Two attempts:
+    #   1. Redirect sys.stdout (fails on frozen/read-only sys builds).
+    #   2. Shadow builtins.print (fails on some minimal builds).
+    # If both fail the host's ACK-wait loop drains non-ACK bytes, so the
+    # protocol still works — just slightly slower.
     class _Null:
         def write(self, *a): pass
         def flush(self, *a): pass
+    _suppressed = False
     try:
         sys.stdout = _Null()
+        _suppressed = True
     except AttributeError:
         pass
+    if not _suppressed:
+        try:
+            import builtins
+            builtins.print = lambda *a, **kw: None
+        except (AttributeError, ImportError):
+            pass
 
     _poll = uselect.poll()
     _poll.register(_in, uselect.POLLIN)
@@ -535,9 +545,9 @@ def serve_serial():
             _out.write(_ACK)
             try: _out.flush()
             except: pass
-            if not _poll.poll(tms): raise OSError('recv timeout')
+            if not _poll.poll(tms): raise OSError('recv timeout1')
             b = _in.read(1)
-            if not b: raise OSError('recv timeout')
+            if not b: raise OSError('recv timeout2')
             return b[0]
 
         def recv(self, n):

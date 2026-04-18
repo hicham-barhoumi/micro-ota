@@ -371,10 +371,16 @@ def send_stream_ota(transport, files, manifest, key='', wipe=False):
                 (sent / 1024) / elapsed,
             ), end='', flush=True)
             if _ser and sent < total:
-                # Wait for device ACK before releasing the next window.
-                ack = _ser.read(1)
-                if ack != b'\x06':
-                    raise OSError('flow ctrl: expected ACK, got {!r}'.format(ack))
+                # Wait for device ACK (\x06) before releasing the next window.
+                # Device print() calls share UART0 and may arrive here first
+                # (e.g. "[OTA] Staged: ..."). Drain until the ACK byte arrives.
+                t_ack = time.time() + 5
+                while True:
+                    b = _ser.read(1)
+                    if b == b'\x06':
+                        break
+                    if not b or time.time() > t_ack:
+                        raise OSError('flow ctrl: timed out waiting for ACK')
         print()
 
         # Device may need extra time to commit many files; bump timeout.
