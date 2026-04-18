@@ -1,8 +1,12 @@
 # micro-ota boot.py — serial transport
-# OTAUpdater is imported here (main thread) so the background thread does
-# not need to run the package import machinery on its small stack.
-from uota import boot_guard
-from uota.ota import OTAUpdater
+import sys
+if '/lib/uota' not in sys.path:
+    sys.path.insert(0, '/lib/uota')
+
+# Pre-import OTAUpdater in the main thread so the background thread
+# does not pay the module-load cost on its limited stack.
+import boot_guard
+from ota import OTAUpdater
 boot_guard.boot()
 
 import _thread
@@ -10,8 +14,7 @@ import _thread
 def _ota():
     try:
         upd = OTAUpdater()
-        from uota import boot_guard as _bg
-        _bg.mark_clean()
+        import boot_guard as _bg; _bg.mark_clean()
         upd.run()
     except Exception as _e:
         print('[OTA] Failed to start:', _e)
