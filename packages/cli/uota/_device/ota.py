@@ -457,7 +457,7 @@ def _handle(conn, cfg):
                         entries.append(name)
                 except OSError:
                     entries.append(name)
-            _send(conn, '\n'.join(entries) + '\n')
+            _send(conn, '\n'.join(entries) + '\n\n')  # blank line = end of listing
         except OSError as e:
             _send(conn, 'error: ' + str(e) + '\n')
 

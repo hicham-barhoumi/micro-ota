@@ -545,6 +545,13 @@ def cmd_terminal(args, cfg):
                         print()
                     except ValueError:
                         print(size_line)
+                elif line.startswith('ls'):
+                    # Multi-line response terminated by a blank line.
+                    while True:
+                        l = transport.read_line()
+                        if not l:
+                            break
+                        print(l)
                 else:
                     print(transport.read_line())
         except OSError as e:

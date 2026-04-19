@@ -443,7 +443,7 @@ def handle_command(conn):
                         entries.append(name)
                 except Exception:
                     entries.append(name)
-            send(conn, '\n'.join(entries) + '\n')
+            send(conn, '\n'.join(entries) + '\n\n')  # blank line = end of listing
         except Exception:
             send(conn, 'error\n')
 
