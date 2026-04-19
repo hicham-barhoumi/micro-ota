@@ -58,7 +58,7 @@ def serve(host='0.0.0.0', port=8080, project_root=None, version=None,
         cfg_path = _find_cfg()
     cfg_path = os.path.abspath(cfg_path)
     if project_root is None:
-        project_root = os.path.dirname(cfg_path)
+        project_root = os.path.dirname(os.path.dirname(cfg_path))  # config/ → project root
 
     with open(cfg_path) as f:
         cfg = json.load(f)
@@ -66,7 +66,7 @@ def serve(host='0.0.0.0', port=8080, project_root=None, version=None,
     if version is None:
         version = cfg.get('version', '0.0.0')
 
-    full_patterns    = cfg.get('fullOtaFiles', ['**/*.py'])
+    full_patterns    = cfg.get('fastOtaFiles', []) + cfg.get('fullOtaFiles', [])
     exclude_patterns = cfg.get('excludedFiles', [])
 
     os.chdir(project_root)
@@ -97,11 +97,11 @@ def serve(host='0.0.0.0', port=8080, project_root=None, version=None,
 
 
 def _find_cfg():
-    """Walk up from CWD looking for ota.json."""
+    """Walk up from CWD looking for config/ota.json."""
     d = os.getcwd()
     for _ in range(5):
-        candidate = os.path.join(d, 'ota.json')
+        candidate = os.path.join(d, 'config', 'ota.json')
         if os.path.exists(candidate):
             return candidate
         d = os.path.dirname(d)
-    raise FileNotFoundError('ota.json not found')
+    raise FileNotFoundError('config/ota.json not found')
