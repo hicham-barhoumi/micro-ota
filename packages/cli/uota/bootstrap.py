@@ -2,7 +2,7 @@
 First-time bootstrap: uploads the OTA library to a blank ESP32 via serial.
 
 Device files are taken from:
-  1. <project>/lib/uota/  (if present — created by `uota init`)
+  1. <project>/lib/uota/  (created by `uota init`)
   2. The bundled _device/ folder inside this package (fallback)
 
 Files uploaded:
@@ -113,17 +113,12 @@ def run(port, baud=115200, device_dir=None, mpy=False):
                 print('  {:<45} → {}'.format(rel, remote))
                 repl.put_file(str(local), remote, on_progress=_progress(rel))
 
-            # Upload config/ota.json from the project (canonical location).
-            # Fall back to root ota.json for backward compatibility.
+            # Upload config/ota.json to the device.
             ota_json = Path.cwd() / 'config' / 'ota.json'
-            if not ota_json.exists():
-                ota_json = Path.cwd() / 'ota.json'
             if ota_json.exists():
                 repl.exec_('import os\ntry:\n os.mkdir("/config")\nexcept:pass\n')
-                label  = str(ota_json.relative_to(Path.cwd()))
-                remote = '/config/ota.json'
-                print('  {:<45} → {}'.format(label, remote))
-                repl.put_file(str(ota_json), remote, on_progress=_progress(label))
+                print('  {:<45} → /config/ota.json'.format('config/ota.json'))
+                repl.put_file(str(ota_json), '/config/ota.json', on_progress=_progress('config/ota.json'))
             else:
                 print('  [skip] config/ota.json not found in current directory')
 

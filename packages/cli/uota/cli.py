@@ -124,15 +124,7 @@ def _friendly(exc, cfg=None):
 
 # -- config --------------------------------------------------------------------
 
-def load_config(path=None):
-    if path is None:
-        # config/ota.json is the canonical location; ota.json at root is legacy.
-        for candidate in ['config/ota.json', 'ota.json']:
-            if os.path.exists(candidate):
-                path = candidate
-                break
-        else:
-            return {}
+def load_config(path='config/ota.json'):
     try:
         with open(path) as f:
             return json.load(f)
