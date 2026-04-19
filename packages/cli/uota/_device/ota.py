@@ -424,6 +424,8 @@ def _handle_stream_ota(conn, cfg):
 
 def _handle(conn, cfg):
     line = _read_line(conn)
+    if not line:
+        raise EOFError  # peer closed the connection cleanly
     parts = line.split(b' ', 1)
     cmd = parts[0]
     arg = parts[1].decode().strip() if len(parts) > 1 else ''
@@ -683,9 +685,17 @@ class OTAUpdater:
                 while True:
                     conn = transport.accept()
                     try:
-                        _handle(conn, self._config)
-                    except Exception as e:
-                        print('[OTA] Handler error:', e)
+                        # Loop commands on the same connection until peer closes it.
+                        # This avoids TCP TIME_WAIT socket exhaustion from
+                        # per-command connect/disconnect cycles.
+                        while True:
+                            try:
+                                _handle(conn, self._config)
+                            except EOFError:
+                                break  # peer closed cleanly
+                            except Exception as e:
+                                print('[OTA] Handler error:', e)
+                                break
                     finally:
                         try:
                             conn.close()

@@ -525,15 +525,20 @@ def cmd_terminal(args, cfg):
     transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None))
     print("Terminal mode. Type 'exit' to quit.")
     print("Commands: ping, version, ls [path], get <path>, rm <path>, reset, wipe")
-    while True:
-        try:
-            line = input('$ ').strip()
-        except (EOFError, KeyboardInterrupt):
-            break
-        if not line or line.lower() in ('exit', 'quit'):
-            break
-        try:
-            with transport:
+    try:
+        transport.connect()
+    except OSError as e:
+        print('Connection error:', e)
+        return
+    try:
+        while True:
+            try:
+                line = input('$ ').strip()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if not line or line.lower() in ('exit', 'quit'):
+                break
+            try:
                 transport.write_line(line)
                 if line.startswith('get '):
                     size_line = transport.read_line()
@@ -554,8 +559,11 @@ def cmd_terminal(args, cfg):
                         print(l)
                 else:
                     print(transport.read_line())
-        except OSError as e:
-            print('Connection error:', e)
+            except OSError as e:
+                print('Connection error:', e)
+                break
+    finally:
+        transport.close()
 
 
 def cmd_version(args, cfg):
