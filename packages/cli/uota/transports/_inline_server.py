@@ -432,7 +432,18 @@ def handle_command(conn):
 
     elif cmd == b'ls':
         try:
-            send(conn, '\n'.join(os.listdir(arg or '/')) + '\n')
+            path = arg or '/'
+            base = path.rstrip('/')
+            entries = []
+            for name in os.listdir(path):
+                try:
+                    if os.stat(base + '/' + name)[0] & 0x4000:
+                        entries.append(name + '/')
+                    else:
+                        entries.append(name)
+                except Exception:
+                    entries.append(name)
+            send(conn, '\n'.join(entries) + '\n')
         except Exception:
             send(conn, 'error\n')
 

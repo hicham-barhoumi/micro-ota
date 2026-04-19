@@ -446,8 +446,17 @@ def _handle(conn, cfg):
 
     elif cmd == b'ls':
         path = arg if arg else '/'
+        base = path.rstrip('/')
         try:
-            entries = os.listdir(path)
+            entries = []
+            for name in os.listdir(path):
+                try:
+                    if os.stat(base + '/' + name)[0] & 0x4000:
+                        entries.append(name + '/')
+                    else:
+                        entries.append(name)
+                except OSError:
+                    entries.append(name)
             _send(conn, '\n'.join(entries) + '\n')
         except OSError as e:
             _send(conn, 'error: ' + str(e) + '\n')
