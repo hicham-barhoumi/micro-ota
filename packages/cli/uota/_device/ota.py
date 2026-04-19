@@ -486,6 +486,13 @@ def _handle(conn, cfg):
         for item in os.listdir('/'):
             if item not in _PROTECTED:
                 _remove_tree('/' + item)
+        # Clean legacy flat files inside /lib that are not part of /lib/uota/
+        try:
+            for item in os.listdir('/lib'):
+                if item != 'uota':
+                    _remove_tree('/lib/' + item)
+        except Exception:
+            pass
         _send(conn, 'ok\n')
 
     else:
