@@ -19,10 +19,20 @@ class WiFiTCPTransport:
             except Exception:
                 pass
             self._server = None
-        self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._server.bind(('0.0.0.0', self.port))
-        self._server.listen(1)
+        import gc
+        gc.collect()   # free any zombie socket objects before allocating a new one
+        try:
+            self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        except OSError as e:
+            raise OSError('socket() failed errno=' + str(e.args[0]))
+        try:
+            self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._server.bind(('0.0.0.0', self.port))
+            self._server.listen(1)
+        except Exception:
+            self._server.close()
+            self._server = None
+            raise
         print('[OTA] TCP server ready on port', self.port)
 
     def accept(self):

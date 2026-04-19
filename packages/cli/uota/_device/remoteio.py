@@ -189,16 +189,23 @@ def run(port=2019):
         _thread.start_new_thread(remoteio.run, ())
     """
     srv = socket.socket()
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(('', port))
-    srv.listen(1)
+    try:
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(('', port))
+        srv.listen(1)
+    except Exception:
+        srv.close()   # don't leak the fd if bind/listen fails
+        raise
     print('[RemoteIO] Listening on :%d' % port)
-    while True:
-        try:
-            conn, addr = srv.accept()
-            print('[RemoteIO] Client connected')
-            _serve(conn)
-            print('[RemoteIO] Client disconnected')
-        except Exception as e:
-            print('[RemoteIO] Error:', e)
-            time.sleep(1)
+    try:
+        while True:
+            try:
+                conn, addr = srv.accept()
+                print('[RemoteIO] Client connected')
+                _serve(conn)
+                print('[RemoteIO] Client disconnected')
+            except Exception as e:
+                print('[RemoteIO] Error:', e)
+                time.sleep(1)
+    finally:
+        srv.close()
