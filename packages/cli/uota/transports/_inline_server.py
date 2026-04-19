@@ -197,7 +197,7 @@ def verify_sig(manifest, key):
 # ── OTA state ─────────────────────────────────────────────────────────────────
 
 try:
-    config = json.load(open('/ota.json'))
+    config = json.load(open('/config/ota.json'))
 except Exception:
     config = {}
 
@@ -206,9 +206,9 @@ STAGE_DIR = '/ota_stage'
 PROTECTED = frozenset([
     'lib',      # OTA system (/lib/uota/) — managed by bootstrap
     'data',     # runtime data — never wiped
-    'config',   # device-specific config — never wiped
-    # OTA system files at root
-    'boot.py', 'ota.json', 'ota_manifest.json', 'ota_version.json', 'ota_boot_state.json',
+    'config',   # device config (/config/ota.json …) — synced via OTA, never wiped
+    # OTA manifest/state files at root
+    'boot.py', 'ota_manifest.json', 'ota_version.json', 'ota_boot_state.json',
 ])
 
 

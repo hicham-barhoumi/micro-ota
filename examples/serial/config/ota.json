@@ -6,7 +6,6 @@
     "ssid": "YOUR_WIFI_SSID",
     "password": "YOUR_WIFI_PASSWORD",
     "otaKey": "",
-    "bleName": "micro-ota",
     "serialPort": "/tmp/vserial",
     "transports": [
         "serial",
@@ -14,10 +13,9 @@
     ],
     "manifestUrl": "",
     "pullInterval": 60,
-    "fastOtaFiles": ["app/**", "main.py"],
+    "fastOtaFiles": ["app/**", "main.py", "config/**"],
     "fullOtaFiles": [],
     "excludedFiles": [
-        ".git/**", "lib/uota/**", "*.zip", "dist/**",
-        "data/**", "config/**"
+        ".git/**", "lib/uota/**", "*.zip", "dist/**", "data/**"
     ]
 }

@@ -33,9 +33,9 @@ _VERSION  = '/ota_version.json'
 _PROTECTED = frozenset([
     'lib',      # OTA system (/lib/uota/) — managed by bootstrap
     'data',     # runtime data — never wiped
-    'config',   # device-specific config — never wiped
-    # OTA system files at root
-    'boot.py', 'ota.json', 'ota_manifest.json', 'ota_version.json', 'ota_boot_state.json',
+    'config',   # device config (/config/ota.json …) — synced via OTA, never wiped
+    # OTA manifest/state files at root
+    'boot.py', 'ota_manifest.json', 'ota_version.json', 'ota_boot_state.json',
 ])
 
 
@@ -595,7 +595,7 @@ def serve_serial():
 
     cfg = {}
     try:
-        cfg = json.load(open('/ota.json'))
+        cfg = json.load(open('/config/ota.json'))
     except Exception:
         pass
 
@@ -620,7 +620,7 @@ class OTAUpdater:
 
     def _load_config(self):
         try:
-            with open('ota.json', 'r') as f:
+            with open('/config/ota.json', 'r') as f:
                 return json.load(f)
         except OSError:
             return {}
