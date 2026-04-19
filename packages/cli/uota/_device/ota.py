@@ -30,7 +30,13 @@ import _thread
 _STAGE   = '/ota_stage'
 _MANIFEST = '/ota_manifest.json'
 _VERSION  = '/ota_version.json'
-_PROTECTED = frozenset(['lib', 'boot.py', 'ota.json', 'ota_manifest.json', 'ota_version.json', 'ota_boot_state.json'])
+_PROTECTED = frozenset([
+    'lib',      # OTA system (/lib/uota/) — managed by bootstrap
+    'data',     # runtime data — never wiped
+    'config',   # device-specific config — never wiped
+    # OTA system files at root
+    'boot.py', 'ota.json', 'ota_manifest.json', 'ota_version.json', 'ota_boot_state.json',
+])
 
 
 # ── HMAC-SHA256 (pure Python — MicroPython has no hmac module) ────────────────

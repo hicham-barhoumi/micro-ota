@@ -451,20 +451,24 @@ def cmd_init(args, cfg):
             "version":      "1.0.0",
             "hostname":     "192.168.1.100",
             "port":         2018,
-            "remoteioPort": 2019,
             "ssid":         "",
             "password":     "",
             "otaKey":       "",
-            "bleName":      "micro-ota",
             "serialPort":   "",
             "transports":   ["wifi_tcp"],
             "manifestUrl":  "",
             "pullInterval": 60,
+            # Files pushed by 'uota fast' — only the hot-reload app layer.
+            # /data and /config on the device are never touched by OTA.
+            "fastOtaFiles": ["app/**", "main.py"],
+            # Extra files pushed by 'uota full' (on top of fastOtaFiles).
+            # Add shared libs or root-level helpers here if needed.
+            "fullOtaFiles": [],
+            # Patterns excluded from every OTA push.
             "excludedFiles": [
-                ".git/**", "lib/uota/**", "*.zip", "dist/**"
+                ".git/**", "lib/uota/**", "*.zip", "dist/**",
+                "data/**", "config/**"
             ],
-            "fastOtaFiles": ["main.py"],
-            "fullOtaFiles": ["*.py", "lib/**", "*.json"],
         }
         with open(ota_json, 'w') as f:
             json.dump(default, f, indent=4)
@@ -472,23 +476,58 @@ def cmd_init(args, cfg):
     else:
         print('[init] ota.json already exists -- skipping')
 
-    # 3. Create stub main.py
+    # 3. Create app/ directory with stub app.py
+    app_dir = target / 'app'
+    app_dir.mkdir(exist_ok=True)
+    app_py = app_dir / 'app.py'
+    if not app_py.exists():
+        app_py.write_text(
+            '# Application entry point — called by main.py\n'
+            'import time\n\n'
+            'def run():\n'
+            '    while True:\n'
+            "        print('Hello from /app/app.py!')\n"
+            '        time.sleep(5)\n'
+        )
+        print('[init] Created app/app.py')
+
+    # 4. Create config/ directory (device-specific settings, excluded from OTA)
+    config_dir = target / 'config'
+    config_dir.mkdir(exist_ok=True)
+    gitkeep = config_dir / '.gitkeep'
+    if not gitkeep.exists():
+        gitkeep.write_text('')
+        print('[init] Created config/  (excluded from OTA; push device config manually)')
+
+    # 5. Create stub main.py
     main_py = target / 'main.py'
     if not main_py.exists():
-        main_py.write_text('# Your application\nprint("Hello from MicroPython!")\n')
+        main_py.write_text(
+            '# Entry point — delegates to /app/app.py\n'
+            'import sys\n'
+            "if '/app' not in sys.path:\n"
+            "    sys.path.insert(0, '/app')\n"
+            'import app\n'
+            'app.run()\n'
+        )
         print('[init] Created main.py')
 
-    # 4. Create boot.py
+    # 6. Create boot.py
     boot_py = target / 'boot.py'
     if not boot_py.exists():
         boot_py.write_text(_BOOT_PY)
         print('[init] Created boot.py')
 
-    print('\nDone! Next steps:')
+    print('\nProject layout:')
+    print('  app/        ← your application code  (fast + full OTA)')
+    print('  config/     ← device-specific config  (excluded from OTA)')
+    print('  data/       ← runtime data on device   (never wiped)')
+    print('  lib/uota/   ← OTA system files         (managed by bootstrap)')
+    print('\nNext steps:')
     print('  1. Edit ota.json -- fill in ssid, password, hostname')
     print('  2. Connect your ESP32 via USB')
     print('  3. Run: uota bootstrap   (first-time device setup)')
-    print('  4. Run: uota fast        (push app updates)')
+    print('  4. Run: uota fast        (push app/ updates)')
 
 
 def cmd_bootstrap(args, cfg):

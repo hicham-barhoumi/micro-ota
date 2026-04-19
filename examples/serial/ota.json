@@ -14,18 +14,10 @@
     ],
     "manifestUrl": "",
     "pullInterval": 60,
+    "fastOtaFiles": ["app/**", "main.py"],
+    "fullOtaFiles": [],
     "excludedFiles": [
-        ".git/**",
-        "lib/uota/**",
-        "*.zip",
-        "dist/**"
-    ],
-    "fastOtaFiles": [
-        "main.py"
-    ],
-    "fullOtaFiles": [
-        "*.py",
-        "lib/**",
-        "*.json"
+        ".git/**", "lib/uota/**", "*.zip", "dist/**",
+        "data/**", "config/**"
     ]
 }

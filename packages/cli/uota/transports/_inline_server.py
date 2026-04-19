@@ -204,11 +204,10 @@ except Exception:
 STAGE_DIR = '/ota_stage'
 
 PROTECTED = frozenset([
-    # new /lib/-based layout (post-bootstrap)
-    'lib',
-    # legacy root-level layout (pre-bootstrap / old firmware)
-    'ota.py', 'boot_guard.py', 'remoteio.py', 'transports',
-    # always-protected
+    'lib',      # OTA system (/lib/uota/) — managed by bootstrap
+    'data',     # runtime data — never wiped
+    'config',   # device-specific config — never wiped
+    # OTA system files at root
     'boot.py', 'ota.json', 'ota_manifest.json', 'ota_version.json', 'ota_boot_state.json',
 ])
 
