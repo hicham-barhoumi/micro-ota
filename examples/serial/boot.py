@@ -21,5 +21,14 @@ def _ota():
 
 _thread.start_new_thread(_ota, ())
 
+# Optional: uncomment if your device has LWIP_MAX_SOCKETS >= 2
+# def _remoteio():
+#     try:
+#         import remoteio
+#         remoteio.run()
+#     except Exception as _e:
+#         print('[RemoteIO] Failed to start:', _e)
+# _thread.start_new_thread(_remoteio, ())
+
 import time
 time.sleep(3)
