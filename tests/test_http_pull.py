@@ -30,7 +30,7 @@ def _write(path, content):
 
 
 def _make_project(tmp, files, version='1.0.0', extra_cfg=None):
-    """Write files and ota.json into tmp; return cfg_path."""
+    """Write files and config/ota.json into tmp; return cfg_path."""
     for name, content in files.items():
         _write(os.path.join(tmp, name), content)
     cfg = {
@@ -40,7 +40,8 @@ def _make_project(tmp, files, version='1.0.0', extra_cfg=None):
     }
     if extra_cfg:
         cfg.update(extra_cfg)
-    cfg_path = os.path.join(tmp, 'ota.json')
+    os.makedirs(os.path.join(tmp, 'config'), exist_ok=True)
+    cfg_path = os.path.join(tmp, 'config', 'ota.json')
     with open(cfg_path, 'w') as f:
         json.dump(cfg, f)
     return cfg_path

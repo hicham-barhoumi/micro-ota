@@ -181,6 +181,12 @@ def _commit_pull(new_manifest):
 
 # ── transport ─────────────────────────────────────────────────────────────────
 
+def _mpy_version():
+    """Return device mpy bytecode version int, or None if not exposed."""
+    import sys
+    return getattr(sys.implementation, 'mpy', None)
+
+
 class HttpPullTransport:
     """
     Pull-mode OTA transport.  Instead of listening for incoming connections,
@@ -190,6 +196,12 @@ class HttpPullTransport:
         while True:
             transport.poll()
             time.sleep(transport.interval)
+
+    mpy negotiation: if the device exposes sys.implementation.mpy, poll()
+    first tries  manifest.mpyN.json  (e.g. manifest.mpy6.json).  A 404
+    silently falls back to manifest.json.  The mpy manifest lists .mpy target
+    paths and adds a "src" field pointing to the .mpyN server file:
+        "lib/uota/ota.mpy": {"sha256": "...", "size": 8317, "src": "lib/uota/ota.mpy6"}
     """
 
     def __init__(self, manifest_url, interval=60, timeout=15):
@@ -201,15 +213,30 @@ class HttpPullTransport:
     # Marker for OTAUpdater to treat this as a pull transport
     is_pull = True
 
+    def _mpy_manifest_url(self):
+        mpy = _mpy_version()
+        if mpy is None:
+            return None
+        return self.manifest_url.replace('.json', '.mpy{}.json'.format(mpy))
+
     def poll(self):
         """Check for updates and apply if a newer version is available."""
-        # 1. Fetch remote manifest
-        try:
-            data = _http_get(self.manifest_url, timeout=self.timeout)
-            remote = json.loads(data)
-        except Exception as e:
-            print('[HTTPPull] Manifest fetch failed:', e)
-            return
+        # 1. Fetch remote manifest — prefer mpy-specific variant
+        remote = None
+        mpy_url = self._mpy_manifest_url()
+        if mpy_url:
+            try:
+                remote = json.loads(_http_get(mpy_url, timeout=self.timeout))
+                print('[HTTPPull] Using', mpy_url.rsplit('/', 1)[-1])
+            except OSError:
+                pass  # 404 or network error — fall through to py manifest
+        if remote is None:
+            try:
+                data = _http_get(self.manifest_url, timeout=self.timeout)
+                remote = json.loads(data)
+            except Exception as e:
+                print('[HTTPPull] Manifest fetch failed:', e)
+                return
 
         remote_version = remote.get('version', '')
 
@@ -257,8 +284,11 @@ class HttpPullTransport:
                     ok = False
                     break
             else:
-                # Changed or new — download
-                url = self._base_url + '/' + rel.lstrip('/')
+                # Changed or new — download.
+                # "src" points to the server-side file (e.g. ota.mpy6);
+                # rel is where the device saves it (e.g. lib/uota/ota.mpy).
+                src_path = info.get('src', rel)
+                url = self._base_url + '/' + src_path.lstrip('/')
                 dst = _STAGE + '/' + rel.lstrip('/')
                 _makedirs('/'.join(dst.split('/')[:-1]))
                 try:

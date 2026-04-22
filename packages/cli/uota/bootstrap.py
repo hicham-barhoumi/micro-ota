@@ -32,20 +32,21 @@ _DEVICE_RELPATHS = [
 _BOOT_PY = (_TEMPLATES / 'boot.py').read_text()
 
 
-def _compile_mpy(src_path, tmp_dir):
+def _compile_mpy(src_path, tmp_dir, mpy_version=None):
     """
     Compile src_path to .mpy using mpy-cross.
-    Returns Path to the compiled .mpy, or None if mpy-cross is unavailable
-    or compilation fails.
+    mpy_version: int passed as  -b <ver>  to target the device's bytecode version.
+    Returns Path to the compiled .mpy, or None on failure.
     """
     mpy_cross = shutil.which('mpy-cross')
     if not mpy_cross:
         return None
     out = Path(tmp_dir) / (Path(src_path).stem + '.mpy')
-    result = subprocess.run(
-        [mpy_cross, '-o', str(out), str(src_path)],
-        capture_output=True,
-    )
+    cmd = [mpy_cross]
+    if mpy_version is not None:
+        cmd += ['-b', str(mpy_version)]
+    cmd += ['-o', str(out), str(src_path)]
+    result = subprocess.run(cmd, capture_output=True)
     if result.returncode == 0 and out.exists():
         return out
     return None
@@ -93,6 +94,55 @@ def run(port, baud=115200, device_dir=None, mpy=False):
     tmp_dir = tempfile.mkdtemp() if mpy else None
     try:
         with RawREPL(port, baud) as repl:
+            # Query mpy bytecode version BEFORE suppressing stdout so print()
+            # still reaches the raw REPL framing.  Used with mpy-cross -b <ver>
+            # to compile bytecode that exactly matches the device firmware.
+            mpy_version = None
+            if mpy:
+                try:
+                    raw = repl.exec(
+                        "import sys\n"
+                        "_v=getattr(sys.implementation,'mpy',None)\n"
+                        "print(_v if _v is not None else '')\n"
+                    )
+                    val = raw.decode().strip()
+                    mpy_version = int(val) if val else None
+                    if mpy_version is not None:
+                        print('[bootstrap] Device mpy version: {} (mpy-cross -b {})'.format(
+                            mpy_version, mpy_version))
+                    else:
+                        print('[bootstrap] mpy version not exposed — mpy-cross will use default')
+                except Exception:
+                    print('[bootstrap] Could not read mpy version — mpy-cross will use default')
+
+            # Suppress sys.stdout on the device so that any background OTA
+            # thread's print() calls produce no output on UART0.  Without this,
+            # the thread's output can land between raw REPL framing bytes
+            # (e.g. between the two \x04 delimiters) and corrupt the protocol.
+            repl.exec(
+                "import sys as _s\n"
+                "class _N:\n"
+                "    def write(self,*a):pass\n"
+                "    def flush(self,*a):pass\n"
+                "try:_s.stdout=_N()\n"
+                "except:pass\n"
+                "del _s,_N\n"
+            )
+
+            # Clear the boot_guard crash counter.  If previous bootstrap
+            # attempts were interrupted before the OTA thread could call
+            # mark_clean(), the counter can reach _MAX_CRASHES and trigger
+            # a reset on the next boot.  Resetting it here prevents that.
+            repl.exec(
+                "try:\n"
+                " import json\n"
+                " _f=open('/ota_boot_state.json','w')\n"
+                " json.dump({'crashes':0,'clean':True},_f)\n"
+                " _f.close()\n"
+                "except:pass\n"
+            )
+            print('[bootstrap] Boot guard state cleared.')
+
             # Upload OTA infrastructure files
             for rel, remote in _DEVICE_RELPATHS:
                 local = device_dir / rel
@@ -101,7 +151,7 @@ def run(port, baud=115200, device_dir=None, mpy=False):
                     continue
 
                 if mpy:
-                    compiled = _compile_mpy(local, tmp_dir)
+                    compiled = _compile_mpy(local, tmp_dir, mpy_version)
                     if compiled:
                         remote_mpy = remote.rsplit('.', 1)[0] + '.mpy'
                         print('  {:<45} → {} (.mpy)'.format(rel, remote_mpy))
@@ -116,7 +166,7 @@ def run(port, baud=115200, device_dir=None, mpy=False):
             # Upload config/ota.json to the device.
             ota_json = Path.cwd() / 'config' / 'ota.json'
             if ota_json.exists():
-                repl.exec_('import os\ntry:\n os.mkdir("/config")\nexcept:pass\n')
+                repl.exec('import os\ntry:\n os.mkdir("/config")\nexcept:pass\n')
                 print('  {:<45} → /config/ota.json'.format('config/ota.json'))
                 repl.put_file(str(ota_json), '/config/ota.json', on_progress=_progress('config/ota.json'))
             else:

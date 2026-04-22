@@ -3,8 +3,9 @@
 uota - micro-ota host CLI
 
 Commands:
+  info        [--port PORT] [--baud BAUD]
   init       [--dir DIR] [--force]
-  bootstrap  [--port PORT] [--baud BAUD]
+  bootstrap  [--port PORT] [--baud BAUD] [--mpy]
   fast        [--host HOST] [--port PORT] [--transport T] [--version VER]
   full        [--host HOST] [--port PORT] [--transport T] [--version VER] [--wipe]
   terminal    [--host HOST] [--port PORT] [--transport T]
@@ -390,7 +391,217 @@ def send_stream_ota(transport, files, manifest, key='', wipe=False):
             sys.exit(1)
 
 
+# -- mpy compilation helpers --------------------------------------------------
+
+_MPY_CACHE = '.uota_cache.json'
+
+
+def _read_mpy_cache():
+    try:
+        with open(_MPY_CACHE) as f:
+            return json.load(f).get('mpy_version')
+    except Exception:
+        return None
+
+
+def _write_mpy_cache(mpy_version):
+    try:
+        data = {}
+        try:
+            with open(_MPY_CACHE) as f:
+                data = json.load(f)
+        except Exception:
+            pass
+        data['mpy_version'] = mpy_version
+        with open(_MPY_CACHE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
+def _query_device_info(port, baud=115200):
+    """Open a raw REPL session, query device info, return dict."""
+    from .transports.serial import RawREPL
+    with RawREPL(port, baud) as repl:
+        raw = repl.exec(
+            "import sys,gc\n"
+            "try:\n"
+            " import os;_u=list(os.uname())\n"
+            "except:_u=['','','','','']\n"
+            "try:\n"
+            " import esp32;_fl=esp32.flash_size()\n"
+            "except:_fl=0\n"
+            "_mpy=getattr(sys.implementation,'mpy',None)\n"
+            "import json\n"
+            "print(json.dumps({"
+            "'v':sys.version,"
+            "'mpy':_mpy,"
+            "'plat':sys.platform,"
+            "'free':gc.mem_free(),"
+            "'used':gc.mem_alloc(),"
+            "'flash':_fl,"
+            "'sysname':_u[0],"
+            "'release':_u[2]"
+            "}))\n"
+        )
+    return json.loads(raw.decode().strip())
+
+
+def _query_mpy_version(port, baud=115200):
+    """
+    Query the mpy bytecode version from device.
+    Returns int if sys.implementation.mpy is available, else None.
+    """
+    from .transports.serial import RawREPL
+    with RawREPL(port, baud) as repl:
+        raw = repl.exec(
+            "import sys\n"
+            "_v=getattr(sys.implementation,'mpy',None)\n"
+            "print(_v if _v is not None else '')\n"
+        )
+    val = raw.decode().strip()
+    return int(val) if val else None
+
+
+def _mpy_cross_version():
+    """
+    Parse the mpy format version from  mpy-cross --version  output.
+    Returns int (major) on success, None if mpy-cross is absent or unparseable.
+    """
+    import subprocess, re, shutil
+    mpy_cross = shutil.which('mpy-cross')
+    if not mpy_cross:
+        return None
+    r = subprocess.run([mpy_cross, '--version'], capture_output=True)
+    out = (r.stdout + r.stderr).decode(errors='replace')
+    m = re.search(r'mpy v(\d+)', out)
+    return int(m.group(1)) if m else None
+
+
+def _resolve_mpy_version(cfg, args):
+    """
+    Return the device's mpy bytecode version for compilation.
+
+    Always reads the cache first.  A live device query (which opens a fresh
+    RawREPL / soft-reset) is only done when the cache is empty AND the
+    transport is serial — this avoids opening two serial connections in a row
+    (one for the query, one for the OTA push), which can confuse the device.
+
+    Run  uota info  to populate the cache explicitly; it also works for WiFi
+    deployments where a live query is not possible.
+    """
+    cached = _read_mpy_cache()
+    if cached is not None:
+        return cached
+
+    transport_names = (
+        [getattr(args, 'transport', None)] if getattr(args, 'transport', None)
+        else cfg.get('transports', ['wifi_tcp'])
+    )
+    if 'serial' in transport_names:
+        port = _normalise_serial_port(
+            getattr(args, 'host', None) or cfg.get('serialPort') or _auto_serial()
+        )
+        baud = cfg.get('serialBaud', 115200)
+        print('[mpy] No cached version — querying device …')
+        ver = _query_mpy_version(port, baud)
+        if ver is None:
+            ver = _mpy_cross_version()
+            if ver is not None:
+                print('[mpy] Device mpy version not exposed; using mpy-cross default (v{})'.format(ver))
+            else:
+                print('[mpy] Cannot determine mpy version — skipping compilation')
+                return None
+        _write_mpy_cache(ver)
+        return ver
+
+    print('[mpy] No cached mpy version — run  uota info --port <port>  first')
+    return None
+
+
+def _compile_files_mpy(files, mpy_version, mpy_patterns, tmp_dir):
+    """
+    Compile .py files matching mpy_patterns to .mpy with mpy-cross -b <ver>.
+    Returns (new_files_dict, compiled_count).
+    new_files_dict maps remote_rel_path → local_abs_path.
+    """
+    import shutil, subprocess, fnmatch
+    mpy_cross = shutil.which('mpy-cross')
+    if not mpy_cross:
+        return files, 0
+
+    new_files = {}
+    count = 0
+    for rel, abs_p in files.items():
+        if rel.endswith('.py') and any(fnmatch.fnmatch(rel, pat) for pat in mpy_patterns):
+            mpy_rel = rel[:-3] + '.mpy'
+            mpy_out = Path(tmp_dir) / mpy_rel.replace('/', '__')
+            r = subprocess.run(
+                [mpy_cross, '-b', str(mpy_version), '-o', str(mpy_out), abs_p],
+                capture_output=True,
+            )
+            if r.returncode == 0 and mpy_out.exists():
+                new_files[mpy_rel] = str(mpy_out)
+                count += 1
+                continue
+            err = r.stderr.decode(errors='replace').strip()
+            print('[mpy] compile failed: {} ({}) — uploading .py'.format(rel, err or '?'))
+        new_files[rel] = abs_p
+    return new_files, count
+
+
+def _manifest_from_dict(files_dict, version):
+    """Build a manifest dict from {rel_path: abs_path} mapping."""
+    from .manifest import _sha256
+    mfiles = {}
+    for rel, abs_p in files_dict.items():
+        mfiles[rel] = {'size': os.path.getsize(abs_p), 'sha256': _sha256(abs_p)}
+    return {'version': version, 'files': mfiles}
+
+
 # -- commands ------------------------------------------------------------------
+
+def _strip_docstrings(node):
+    import ast as _ast
+    if isinstance(node, (_ast.Module, _ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
+        if (node.body and
+                isinstance(node.body[0], _ast.Expr) and
+                isinstance(node.body[0].value, _ast.Constant) and
+                isinstance(node.body[0].value.value, str)):
+            node.body.pop(0)
+            if not node.body:
+                node.body.append(_ast.Pass())
+    for child in _ast.iter_child_nodes(node):
+        _strip_docstrings(child)
+
+
+def _minify_py(source):
+    """Strip comments and docstrings from Python source for device deployment."""
+    try:
+        import ast as _ast
+        tree = _ast.parse(source)
+        _strip_docstrings(tree)
+        _ast.fix_missing_locations(tree)
+        return _ast.unparse(tree) + '\n'
+    except Exception:
+        return source
+
+
+def _copy_device_files(src, dst):
+    """Recursively copy device files, minifying .py files."""
+    import shutil
+    dst.mkdir(parents=True, exist_ok=True)
+    for item in src.iterdir():
+        if item.name == '__pycache__' or item.suffix in ('.pyc', '.pyo'):
+            continue
+        dest = dst / item.name
+        if item.is_dir():
+            _copy_device_files(item, dest)
+        elif item.suffix == '.py':
+            dest.write_text(_minify_py(item.read_text('utf-8')), 'utf-8')
+        else:
+            shutil.copy2(item, dest)
+
 
 def cmd_init(args, cfg):
     """Initialize a new micro-ota project in the target directory."""
@@ -400,7 +611,7 @@ def cmd_init(args, cfg):
     target.mkdir(parents=True, exist_ok=True)
     force  = getattr(args, 'force', False)
 
-    # 1. Copy device OTA infrastructure files
+    # 1. Copy device OTA infrastructure files (minified)
     device_src = Path(__file__).parent / '_device'
     device_dst = target / 'lib' / 'uota'
     if device_dst.exists() and not force:
@@ -408,9 +619,8 @@ def cmd_init(args, cfg):
     else:
         if device_dst.exists():
             shutil.rmtree(device_dst)
-        shutil.copytree(device_src, device_dst,
-                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '*.pyo'))
-        print('[init] Copied OTA device files -> lib/uota/')
+        _copy_device_files(device_src, device_dst)
+        print('[init] Copied OTA device files -> lib/uota/ (minified)')
 
     # 2. Create config/ with ota.json inside
     config_dir = target / 'config'
@@ -428,14 +638,14 @@ def cmd_init(args, cfg):
             "transports":   ["wifi_tcp"],
             "manifestUrl":  "",
             "pullInterval": 60,
-            # config/ is included so device config stays in sync on every push.
-            # data/ is excluded — it is runtime state managed by the device.
             "fastOtaFiles": ["app/**", "main.py", "config/**"],
-            # Extra files for 'uota full' on top of fast (e.g. shared libs).
             "fullOtaFiles": [],
             "excludedFiles": [
                 ".git/**", "lib/uota/**", "*.zip", "dist/**", "data/**"
             ],
+            # .py files matching these patterns are compiled to .mpy before upload.
+            # Requires mpy-cross on PATH; version is queried from the device automatically.
+            "mpyFiles": ["lib/**"],
         }
         with open(ota_json, 'w') as f:
             json.dump(default, f, indent=4)
@@ -475,6 +685,44 @@ def cmd_init(args, cfg):
     print('  4. Run: uota fast        (push app/ + config/ updates)')
 
 
+def cmd_info(args, cfg):
+    """Query device info via serial raw REPL."""
+    port = _normalise_serial_port(
+        args.port or cfg.get('serialPort') or _auto_serial()
+    )
+    baud = args.baud or cfg.get('serialBaud', 115200)
+    print('Connecting to {} @ {} …'.format(port, baud))
+    info = _query_device_info(port, baud)
+
+    mpy_ver = info.get('mpy')
+    flash_b = info.get('flash', 0)
+    free    = info.get('free', 0)
+    used    = info.get('used', 0)
+
+    print()
+    print('Device info  ({})'.format(port))
+    print('─' * 52)
+    print('MicroPython  {}'.format(info.get('v', '?')))
+    print('Platform     {}'.format(info.get('plat', '?')))
+    if info.get('sysname'):
+        print('Kernel       {}  {}'.format(info.get('sysname', ''), info.get('release', '')))
+    print('Heap         free {:,} B  /  used {:,} B'.format(free, used))
+    if flash_b:
+        print('Flash        {} MB'.format(flash_b // (1024 * 1024)))
+    if mpy_ver is not None:
+        print('mpy version  {}  →  mpy-cross -b {}'.format(mpy_ver, mpy_ver))
+        _write_mpy_cache(mpy_ver)
+        print('\nmpy version cached to {}'.format(_MPY_CACHE))
+    else:
+        fallback = _mpy_cross_version()
+        if fallback is not None:
+            print('mpy version  (not in firmware; mpy-cross emits v{} — will use as default)'.format(fallback))
+            _write_mpy_cache(fallback)
+            print('\nmpy version cached to {} (from mpy-cross)'.format(_MPY_CACHE))
+        else:
+            print('mpy version  (not determinable — mpy-cross not found or version not parseable)')
+
+
 def cmd_bootstrap(args, cfg):
     from .bootstrap import run as do_bootstrap
     do_bootstrap(
@@ -484,26 +732,48 @@ def cmd_bootstrap(args, cfg):
     )
 
 
-def cmd_fast(args, cfg):
-    patterns  = cfg.get('fastOtaFiles', ['main.py'])
-    excludes  = cfg.get('excludedFiles', [])
-    version   = args.version or cfg.get('version', 'unknown')
-    manifest  = build_manifest(patterns, excludes, version)
-    key       = cfg.get('otaKey', '')
-    files     = {p: p for p in manifest['files']}
+def _ota_push(cfg, args, patterns, excludes, wipe=False):
+    """Shared implementation for fast and full OTA pushes."""
+    import shutil, tempfile
+    version  = args.version or cfg.get('version', 'unknown')
+    manifest = build_manifest(patterns, excludes, version)
+    key      = cfg.get('otaKey', '')
+    files    = {p: p for p in manifest['files']}
+
+    tmp_dir = None
+    mpy_patterns = cfg.get('mpyFiles', [])
+    if mpy_patterns and shutil.which('mpy-cross'):
+        mpy_version = _resolve_mpy_version(cfg, args)
+        if mpy_version is not None:
+            tmp_dir = tempfile.mkdtemp()
+            files, n = _compile_files_mpy(files, mpy_version, mpy_patterns, tmp_dir)
+            if n:
+                manifest = _manifest_from_dict(files, version)
+                print('[mpy] {}/{} files compiled to .mpy (v{})'.format(
+                    n, len(manifest['files']), mpy_version))
+            else:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                tmp_dir = None
+
     transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None))
-    send_stream_ota(transport, files, manifest, key=key)
+    try:
+        send_stream_ota(transport, files, manifest, key=key, wipe=wipe)
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def cmd_fast(args, cfg):
+    _ota_push(cfg, args,
+              patterns=cfg.get('fastOtaFiles', ['main.py']),
+              excludes=cfg.get('excludedFiles', []))
 
 
 def cmd_full(args, cfg):
-    patterns  = cfg.get('fastOtaFiles', []) + cfg.get('fullOtaFiles', [])
-    excludes  = cfg.get('excludedFiles', [])
-    version   = args.version or cfg.get('version', 'unknown')
-    manifest  = build_manifest(patterns, excludes, version)
-    key       = cfg.get('otaKey', '')
-    files     = {p: p for p in manifest['files']}
-    transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None))
-    send_stream_ota(transport, files, manifest, key=key, wipe=args.wipe)
+    _ota_push(cfg, args,
+              patterns=cfg.get('fastOtaFiles', []) + cfg.get('fullOtaFiles', []),
+              excludes=cfg.get('excludedFiles', []),
+              wipe=args.wipe)
 
 
 def cmd_terminal(args, cfg):
@@ -609,6 +879,11 @@ def main():
                    help='Show full traceback on errors')
     sub = p.add_subparsers(dest='command', required=True)
 
+    # info
+    inf = sub.add_parser('info', help='Query device info via serial (mpy version, heap, flash …)')
+    inf.add_argument('--port', help='Serial port (auto-detected if omitted)')
+    inf.add_argument('--baud', type=int, default=115200)
+
     # init
     ini = sub.add_parser('init', help='Initialize a new micro-ota project')
     ini.add_argument('--dir',   default='.', help='Target directory (default: current dir)')
@@ -677,6 +952,7 @@ def main():
     cfg  = load_config()
 
     dispatch = {
+        'info':      cmd_info,
         'init':      cmd_init,
         'bootstrap': cmd_bootstrap,
         'fast':      cmd_fast,

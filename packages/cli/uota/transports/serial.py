@@ -45,7 +45,29 @@ class RawREPL:
     def open(self):
         self._ser = serial.Serial(self.port, self.baud, timeout=self.timeout)
         time.sleep(0.5)
-        self._interrupt()
+
+        # Interrupt any running code, then perform a soft reset so the device
+        # boots fresh with no background threads (OTA thread, remoteio …).
+        # Without this, threads started by boot.py keep running and their
+        # UART0 writes corrupt the raw REPL framing mid-upload.
+        self._ser.write(b'\r\x03\x03')   # Ctrl-C × 2: interrupt current code
+        self._ser.flush()
+        time.sleep(0.2)
+        self._ser.write(b'\x02')         # Ctrl-B: exit raw REPL → normal REPL
+        self._ser.flush()
+        time.sleep(0.05)
+        self._ser.write(b'\x04')         # Ctrl-D: soft reset
+        self._ser.flush()
+        # Spam Ctrl-C for 2 s during the reboot so we interrupt boot.py
+        # before _thread.start_new_thread() is reached.  This prevents the
+        # OTA background thread from being spawned at all.
+        t0 = time.time()
+        while time.time() - t0 < 2.0:
+            self._ser.write(b'\x03')
+            self._ser.flush()
+            time.sleep(0.05)
+        self._ser.reset_input_buffer()
+
         self._enter_raw()
 
     def close(self):
@@ -75,22 +97,22 @@ class RawREPL:
         self._ser.reset_input_buffer()
 
     def _enter_raw(self):
-        self._ser.write(b'\x01')   # Ctrl+A
-        self._ser.flush()
-        time.sleep(0.1)
-        data = self._ser.read(self._ser.in_waiting or 1)
-        if b'raw REPL' not in data:
-            # Try once more after another interrupt
-            self._interrupt()
-            self._ser.write(b'\x01')
+        # Try several times: the device might still be printing boot messages
+        # or running import statements when we first send Ctrl+A.
+        data = b''
+        for attempt in range(5):
+            self._ser.write(b'\x01')   # Ctrl+A: enter raw REPL
             self._ser.flush()
-            time.sleep(0.2)
+            time.sleep(0.3)
             data = self._ser.read(self._ser.in_waiting or 1)
-            if b'raw REPL' not in data:
-                raise RuntimeError(
-                    'Could not enter raw REPL. Got: ' + repr(data) +
-                    '\nCheck the port/baud or press Reset on the device.'
-                )
+            if b'raw REPL' in data:
+                return
+            # Not ready yet — interrupt any pending code and retry.
+            self._interrupt()
+        raise RuntimeError(
+            'Could not enter raw REPL. Got: ' + repr(data) +
+            '\nCheck the port/baud or press Reset on the device.'
+        )
 
     def exec(self, code):
         """Execute a snippet of Python code. Raises on MicroPython error."""

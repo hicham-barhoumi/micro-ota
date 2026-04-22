@@ -51,6 +51,8 @@ class MockSerial:
         Block until at least 1 byte arrives, then return up to n bytes.
         Matches real pyserial: read(n) returns AT MOST n bytes.
         """
+        if n == 0:
+            return b''
         if not self._rbuf:
             try:
                 self._rbuf.extend(self._d2h.get(timeout=self._timeout))
@@ -72,6 +74,10 @@ class MockSerial:
                 self._d2h.get_nowait()
             except queue.Empty:
                 break
+
+    @property
+    def in_waiting(self):
+        return len(self._rbuf) + sum(len(x) for x in list(self._d2h.queue))
 
     def close(self):
         self.is_open = False
@@ -404,7 +410,7 @@ def test_inline_server_is_valid_python():
 
 def test_inline_server_contains_handle_loop():
     assert 'while True' in _INLINE_SERVER
-    assert '_h(_C())' in _INLINE_SERVER or '_handle' in _INLINE_SERVER
+    assert 'handle_command' in _INLINE_SERVER
 
 
 if __name__ == '__main__':

@@ -80,29 +80,22 @@ def get_crash_count():
 
 def _try_firmware_rollback():
     """
-    Attempt to switch to the previous firmware partition and reboot.
+    Print a rollback notice and advise recovery options.
 
-    This is effective when a new MicroPython firmware was flashed via
-    'uota flash' and the new firmware is crash-looping.  Switching to the
-    previous partition restores the old firmware.
-
-    If esp32.Partition is unavailable (e.g. custom build, SAMD, RP2),
-    the function is a no-op and the device continues booting normally.
+    Automatic machine.reset() / partition switching is intentionally omitted:
+    it would interrupt a concurrent bootstrap session and, if the secondary OTA
+    partition has no valid firmware, would put the device into an infinite reset
+    loop.  The device continues booting so the OTA server can reach a host that
+    issues a new push or bootstrap to self-repair.
     """
     try:
         import esp32
         current = esp32.Partition(esp32.Partition.RUNNING)
         previous = current.get_next_update()
-        if previous is None:
-            print('[boot_guard] No previous partition available for rollback.')
-            print('[boot_guard] Reflash via: uota bootstrap (USB required)')
-            return
-        print('[boot_guard] Switching to previous firmware partition…')
-        previous.set_boot()
-        import machine, time
-        time.sleep(0.5)
-        machine.reset()
-    except Exception as e:
-        # esp32.Partition not available — file-based OTA only, no rollback.
-        print('[boot_guard] Firmware rollback unavailable ({}).'.format(e))
-        print('[boot_guard] To recover: uota bootstrap (USB required)')
+        if previous is not None:
+            print('[boot_guard] Previous firmware partition available.')
+        else:
+            print('[boot_guard] No previous partition available.')
+    except Exception:
+        pass
+    print('[boot_guard] To recover: uota bootstrap (USB required)')
