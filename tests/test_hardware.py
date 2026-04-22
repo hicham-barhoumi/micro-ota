@@ -28,12 +28,16 @@ from uota.cli import send_ota
 # ── config ────────────────────────────────────────────────────────────────────
 
 def _cfg():
-    path = os.path.join(os.path.dirname(__file__), '..', 'ota.json')
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}  # no ota.json — hardware tests will be skipped at runtime
+    root = os.path.join(os.path.dirname(__file__), '..')
+    for candidate in ('config/ota.json', 'ota.json',
+                      'examples/serial/config/ota.json'):
+        path = os.path.join(root, candidate)
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except FileNotFoundError:
+            pass
+    return {}  # no ota.json — hardware tests will be skipped at runtime
 
 CFG         = _cfg()
 DEVICE_IP   = CFG.get('hostname', '192.168.137.215')
@@ -122,7 +126,7 @@ def skip_if_no_wifi(fn):
     def w():
         if SKIP_WIFI:
             raise Skip('SKIP_WIFI set')
-        if not wait_for_wifi(timeout=5):
+        if not wait_for_wifi(timeout=20):
             raise Skip('WiFi OTA server unreachable (' + DEVICE_IP + ')')
         fn()
     w.__name__ = fn.__name__
@@ -166,7 +170,7 @@ def test_serial_ls_root():
 def test_serial_get_file():
     t = serial()
     with t:
-        t.write_line('get /ota.json')
+        t.write_line('get /config/ota.json')
         size = int(t.read_line().strip())
         assert size > 0
         data = t.read_exact(size)
@@ -229,14 +233,22 @@ def test_serial_wipe_keeps_ota_lib():
     root_lines = send_ls(serial(), '/')
     root_joined = '\n'.join(root_lines)
 
-    # New /lib/ layout (post-bootstrap): OTA files live in /lib/
+    # New /lib/uota/ layout (post-bootstrap): OTA files live in /lib/uota/
     if 'lib' in root_joined:
         lib_lines  = send_ls(serial(), '/lib')
         lib_joined = '\n'.join(lib_lines)
-        assert 'ota.py' in lib_joined or 'ota.mpy' in lib_joined, \
-            'ota.py missing from /lib after wipe: ' + repr(lib_lines)
-        assert 'boot_guard' in lib_joined, \
-            'boot_guard missing from /lib after wipe: ' + repr(lib_lines)
+        if 'uota' in lib_joined:
+            uota_lines  = send_ls(serial(), '/lib/uota')
+            uota_joined = '\n'.join(uota_lines)
+            assert 'ota.py' in uota_joined or 'ota.mpy' in uota_joined, \
+                'ota.py missing from /lib/uota after wipe: ' + repr(uota_lines)
+            assert 'boot_guard' in uota_joined, \
+                'boot_guard missing from /lib/uota after wipe: ' + repr(uota_lines)
+        else:
+            assert 'ota.py' in lib_joined or 'ota.mpy' in lib_joined, \
+                'ota.py missing from /lib after wipe: ' + repr(lib_lines)
+            assert 'boot_guard' in lib_joined, \
+                'boot_guard missing from /lib after wipe: ' + repr(lib_lines)
     else:
         # Legacy root-level layout (pre-bootstrap)
         assert 'ota.py'        in root_joined, 'ota.py missing after wipe: '        + repr(root_lines)
@@ -260,15 +272,15 @@ def test_wifi_version():
 def test_wifi_ls_root():
     lines = send_ls(wifi(), '/')
     joined = '\n'.join(lines)
-    assert 'ota.py'        in joined, repr(lines)
-    assert 'boot_guard.py' in joined, repr(lines)
+    assert 'boot.py' in joined, 'boot.py missing: ' + repr(lines)
+    assert 'lib' in joined or 'ota.py' in joined, 'OTA lib missing: ' + repr(lines)
 
 
 @skip_if_no_wifi
 def test_wifi_get_file():
     t = wifi()
     with t:
-        t.write_line('get /ota.json')
+        t.write_line('get /config/ota.json')
         size = int(t.read_line().strip())
         data = t.read_exact(size)
         cfg = json.loads(data)

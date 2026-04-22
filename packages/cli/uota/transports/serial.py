@@ -325,8 +325,12 @@ class SerialOTATransport:
     def close(self):
         if self._ser and self._ser.is_open:
             try:
-                # Ctrl-C interrupts the running loop; Ctrl-B exits raw REPL
+                # Ctrl-C stops the inline server loop; Ctrl-B exits raw REPL;
+                # Ctrl-D soft-resets so boot.py restarts the OTA/WiFi threads.
                 self._ser.write(b'\x03\x02')
+                self._ser.flush()
+                time.sleep(0.1)
+                self._ser.write(b'\x04')
                 self._ser.flush()
             except Exception:
                 pass
