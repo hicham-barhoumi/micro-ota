@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import * as cp from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -13,10 +12,9 @@ function workspaceRoot(): string | undefined {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
 
-/** Return path to ota.json in the workspace, or undefined. */
-function findOtaJson(root: string): string | undefined {
-    const p = path.join(root, 'ota.json');
-    return fs.existsSync(p) ? p : undefined;
+/** Return true if config/ota.json exists in the workspace root. */
+function hasOtaJson(root: string): boolean {
+    return fs.existsSync(path.join(root, 'config', 'ota.json'));
 }
 
 /**
@@ -58,9 +56,10 @@ interface BarButton {
 }
 
 const BAR_BUTTONS: BarButton[] = [
-    { text: '$(zap) Fast',          tooltip: 'micro-ota: Fast OTA Push',        command: 'micro-ota.fast',      priority: 106 },
-    { text: '$(cloud-upload) Full', tooltip: 'micro-ota: Full OTA Push',        command: 'micro-ota.full',      priority: 105 },
-    { text: '$(terminal) Shell',    tooltip: 'micro-ota: Open Device Terminal', command: 'micro-ota.terminal',  priority: 104 },
+    { text: '$(zap) Fast',          tooltip: 'micro-ota: Fast OTA Push',        command: 'micro-ota.fast',      priority: 107 },
+    { text: '$(cloud-upload) Full', tooltip: 'micro-ota: Full OTA Push',        command: 'micro-ota.full',      priority: 106 },
+    { text: '$(terminal) Shell',    tooltip: 'micro-ota: Open Device Terminal', command: 'micro-ota.terminal',  priority: 105 },
+    { text: '$(info) Info',         tooltip: 'micro-ota: Device Info',          command: 'micro-ota.info',      priority: 104 },
     { text: '$(tag) Version',       tooltip: 'micro-ota: Read Device Version',  command: 'micro-ota.version',   priority: 103 },
     { text: '$(radio-tower) Listen',tooltip: 'micro-ota: RemoteIO Listen',      command: 'micro-ota.listen',    priority: 102 },
     { text: '$(plug) Bootstrap',    tooltip: 'micro-ota: Bootstrap Device (Serial)', command: 'micro-ota.bootstrap', priority: 101 },
@@ -84,9 +83,9 @@ async function cmdInit(): Promise<void> {
         vscode.window.showErrorMessage('micro-ota: Open a folder first.');
         return;
     }
-    if (findOtaJson(root)) {
+    if (hasOtaJson(root)) {
         const ok = await vscode.window.showWarningMessage(
-            'ota.json already exists. Re-initialize?', 'Yes', 'No'
+            'config/ota.json already exists. Re-initialize?', 'Yes', 'No'
         );
         if (ok !== 'Yes') { return; }
         runInTerminal(['init', '--force'], root);
@@ -97,6 +96,10 @@ async function cmdInit(): Promise<void> {
 
 function cmdBootstrap(): void {
     runInTerminal(['bootstrap']);
+}
+
+function cmdInfo(): void {
+    runInTerminal(['info']);
 }
 
 async function cmdFast(): Promise<void> {
@@ -150,15 +153,15 @@ export function activate(context: vscode.ExtensionContext): void {
     const statusBarItems = createStatusBarItems();
     statusBarItems.forEach(item => context.subscriptions.push(item));
 
-    // Show status bar buttons only when ota.json is present
+    // Show status bar buttons only when config/ota.json is present
     const updateBar = () => {
         const root = workspaceRoot();
-        const visible = !!(root && findOtaJson(root));
+        const visible = !!(root && hasOtaJson(root));
         statusBarItems.forEach(item => visible ? item.show() : item.hide());
     };
     updateBar();
 
-    const watcher = vscode.workspace.createFileSystemWatcher('**/ota.json');
+    const watcher = vscode.workspace.createFileSystemWatcher('**/config/ota.json');
     watcher.onDidCreate(() => updateBar());
     watcher.onDidDelete(() => updateBar());
     context.subscriptions.push(watcher);
@@ -169,6 +172,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     reg('micro-ota.init',      cmdInit);
     reg('micro-ota.bootstrap', cmdBootstrap);
+    reg('micro-ota.info',      cmdInfo);
     reg('micro-ota.fast',      cmdFast);
     reg('micro-ota.full',      cmdFull);
     reg('micro-ota.terminal',  cmdTerminal);
