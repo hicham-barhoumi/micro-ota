@@ -79,7 +79,7 @@ const BAR_BUTTONS: BarButton[] = [
     { text: '$(terminal) Shell',    tooltip: 'micro-ota: Open Device Terminal', command: 'micro-ota.terminal',  priority: 105 },
     { text: '$(info) Info',         tooltip: 'micro-ota: Device Info',          command: 'micro-ota.info',      priority: 104 },
     { text: '$(tag) Version',       tooltip: 'micro-ota: Read Device Version',  command: 'micro-ota.version',   priority: 103 },
-    { text: '$(radio-tower) Listen',tooltip: 'micro-ota: RemoteIO Listen',      command: 'micro-ota.listen',    priority: 102 },
+    { text: '$(radio-tower) RemoteIO', tooltip: 'micro-ota: RemoteIO Listen',   command: 'micro-ota.listen',    priority: 102 },
     { text: '$(plug) Bootstrap',    tooltip: 'micro-ota: Bootstrap Device (Serial)', command: 'micro-ota.bootstrap', priority: 101 },
 ];
 

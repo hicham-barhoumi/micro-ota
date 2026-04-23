@@ -161,9 +161,9 @@ class RemoteIOClient:
 # ── CLI helpers ───────────────────────────────────────────────────────────────
 
 def _load_config():
-    """Read host/port from ota.json if available."""
+    """Read host/port from config/ota.json in the current working directory."""
     import os as _os
-    path = _os.path.join(_os.path.dirname(__file__), '..', 'ota.json')
+    path = _os.path.join(_os.getcwd(), 'config', 'ota.json')
     try:
         with open(path) as f:
             cfg = json.load(f)
