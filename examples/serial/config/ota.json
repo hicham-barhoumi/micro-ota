@@ -1,6 +1,6 @@
 {
     "version": "1.0.0",
-    "hostname": "192.168.1.100",
+    "hostname": "192.168.137.115",
     "port": 2018,
     "remoteioPort": 2019,
     "ssid": "YOUR_WIFI_SSID",
@@ -12,7 +12,7 @@
     ],
     "manifestUrl": "",
     "pullInterval": 60,
-    "fastOtaFiles": ["app/**", "main.py", "config/**"],
+    "fastOtaFiles": ["app/**", "main.py", "boot.py", "config/**"],
     "fullOtaFiles": ["**"],
     "excludedFiles": [
         ".git/**", "dist/**"
