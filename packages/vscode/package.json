@@ -43,12 +43,6 @@
           "type": "string",
           "default": "uota",
           "description": "Path to the uota executable (default: uota from PATH)"
-        },
-        "micro-ota.transport": {
-          "type": "string",
-          "enum": ["wifi_tcp", "serial", "ble"],
-          "default": "wifi_tcp",
-          "description": "Default OTA transport"
         }
       }
     }

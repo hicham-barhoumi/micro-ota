@@ -119,10 +119,7 @@ function cmdServe():     void { runInTerminal(['serve']); }
 function cmdBundle():    void { runInTerminal(['bundle', '--zip']); }
 function cmdListen():    void { runInTerminal(['remoteio', 'listen']); }
 
-async function cmdFast(): Promise<void> {
-    const transport = vscode.workspace.getConfiguration('micro-ota').get<string>('transport', 'wifi_tcp');
-    runInTerminal(['fast', '--transport', transport]);
-}
+function cmdFast(): void { runInTerminal(['fast']); }
 
 async function cmdFull(): Promise<void> {
     const wipe = await vscode.window.showQuickPick(
@@ -132,15 +129,10 @@ async function cmdFull(): Promise<void> {
     if (wipe === undefined) { return; }
     const args = ['full'];
     if (wipe.startsWith('Yes')) { args.push('--wipe'); }
-    const transport = vscode.workspace.getConfiguration('micro-ota').get<string>('transport', 'wifi_tcp');
-    args.push('--transport', transport);
     runInTerminal(args);
 }
 
-function cmdTerminal(): void {
-    const transport = vscode.workspace.getConfiguration('micro-ota').get<string>('transport', 'wifi_tcp');
-    runInTerminal(['terminal', '--transport', transport]);
-}
+function cmdTerminal(): void { runInTerminal(['terminal']); }
 
 async function cmdFlash(): Promise<void> {
     const firmware = await pickBinFile();
