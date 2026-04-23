@@ -88,6 +88,7 @@ def _http_get(url, stream_to=None, timeout=15):
 _STAGE = '/ota_stage'
 _MANIFEST = '/ota_manifest.json'
 _VERSION  = '/ota_version.json'
+_PROTECTED = frozenset(['lib', 'data', 'config', 'boot.py', 'ota_manifest.json', 'ota_version.json', 'ota_boot_state.json'])
 
 
 def _makedirs(path):
@@ -151,6 +152,8 @@ def _commit_pull(new_manifest):
         old_files = set()
     new_files = set(new_manifest.get('files', {}).keys())
     for rel in old_files - new_files:
+        if rel.lstrip('/').split('/')[0] in _PROTECTED:
+            continue
         try:
             os.remove('/' + rel.lstrip('/'))
             print('[HTTPPull] Removed:', rel)

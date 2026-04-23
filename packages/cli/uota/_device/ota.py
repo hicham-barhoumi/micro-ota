@@ -288,6 +288,8 @@ def _commit(new_manifest, staged):
 
     new_files = set(new_manifest.get('files', {}).keys()) if new_manifest else set()
     for rel in old_files - new_files:
+        if rel.lstrip('/').split('/')[0] in _PROTECTED:
+            continue
         path = '/' + rel.lstrip('/')
         try:
             os.remove(path)

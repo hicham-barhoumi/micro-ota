@@ -21,12 +21,15 @@ _BUNDLED   = Path(__file__).parent / '_device'
 _TEMPLATES = Path(__file__).parent / '_templates'
 
 _DEVICE_RELPATHS = [
-    ('__init__.py',               '/lib/uota/__init__.py'),
-    ('ota.py',                    '/lib/uota/ota.py'),
-    ('boot_guard.py',             '/lib/uota/boot_guard.py'),
-    ('remoteio.py',               '/lib/uota/remoteio.py'),
-    ('transports/__init__.py',    '/lib/uota/transports/__init__.py'),
-    ('transports/wifi_tcp.py',    '/lib/uota/transports/wifi_tcp.py'),
+    ('__init__.py',                  '/lib/uota/__init__.py'),
+    ('ota.py',                       '/lib/uota/ota.py'),
+    ('boot_guard.py',                '/lib/uota/boot_guard.py'),
+    ('remoteio.py',                  '/lib/uota/remoteio.py'),
+    ('transports/__init__.py',       '/lib/uota/transports/__init__.py'),
+    ('transports/wifi_tcp.py',       '/lib/uota/transports/wifi_tcp.py'),
+    ('transports/http_pull.py',      '/lib/uota/transports/http_pull.py'),
+    ('transports/serial.py',         '/lib/uota/transports/serial.py'),
+    ('transports/ble.py',            '/lib/uota/transports/ble.py'),
 ]
 
 _BOOT_PY = (_TEMPLATES / 'boot.py').read_text()

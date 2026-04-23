@@ -631,20 +631,18 @@ def cmd_init(args, cfg):
             "version":      "1.0.0",
             "hostname":     "192.168.1.100",
             "port":         2018,
+            "remoteioPort": 2019,
             "ssid":         "",
             "password":     "",
             "otaKey":       "",
-            "serialPort":   "",
             "transports":   ["wifi_tcp"],
             "manifestUrl":  "",
             "pullInterval": 60,
             "fastOtaFiles": ["app/**", "main.py", "config/**"],
-            "fullOtaFiles": [],
+            "fullOtaFiles": ["**"],
             "excludedFiles": [
                 ".git/**", "lib/uota/**", "*.zip", "dist/**", "data/**"
             ],
-            # .py files matching these patterns are compiled to .mpy before upload.
-            # Requires mpy-cross on PATH; version is queried from the device automatically.
             "mpyFiles": ["lib/**"],
         }
         with open(ota_json, 'w') as f:
