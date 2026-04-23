@@ -159,6 +159,8 @@ def run(port, baud=115200, device_dir=None, mpy=False):
                         remote_mpy = remote.rsplit('.', 1)[0] + '.mpy'
                         print('  {:<45} → {} (.mpy)'.format(rel, remote_mpy))
                         repl.put_file(str(compiled), remote_mpy, on_progress=_progress(rel))
+                        # Remove .py counterpart so MicroPython doesn't find both
+                        repl.exec("import os\ntry:\n os.remove({!r})\nexcept:pass\n".format(remote))
                         continue
                     else:
                         print('  [mpy-cross failed] {} — uploading .py'.format(rel))

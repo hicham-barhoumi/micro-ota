@@ -190,21 +190,21 @@ Time from the first Python instruction in `boot.py` to the moment `app.run()` is
 
 | Scenario | Time |
 |---|---|
-| Without micro-ota | 48 ms |
-| With micro-ota — `.mpy` | **629 ms** (`.py`: 709 ms) |
-| Overhead | +581 ms |
+| Without micro-ota | 28 ms |
+| With micro-ota — `.mpy` | **280 ms** (`.py`: 709 ms) |
+| Overhead | +252 ms |
 
 OTA import breakdown (`.py` / `.mpy`):
 
 | Step | `.py` | `.mpy` |
 |---|---|---|
-| `import boot_guard` | 44 ms | 46 ms |
-| `from ota import OTAUpdater` | 519 ms | 362 ms |
-| `boot_guard.boot()` (JSON r/w) | 97 ms | 97 ms |
-| `_thread.start_new_thread` | 2 ms | 2 ms |
-| `import app` | 47 ms | 47 ms |
+| `import boot_guard` | 44 ms | 26 ms |
+| `from ota import OTAUpdater` | 519 ms | 154 ms |
+| `boot_guard.boot()` (JSON r/w) | 97 ms | 70 ms |
+| `_thread.start_new_thread` | 2 ms | 1 ms |
+| `import app` | 47 ms | 29 ms |
 
-The dominant cost is parsing and compiling `ota.py` on every boot. Pre-compiling with `--mpy` saves ~157 ms on that step. `boot.py` and `main.py` finish before the OTA thread connects to WiFi — your app is already running while OTA initialises in the background.
+The dominant cost is parsing and compiling `ota.py` on every boot. Pre-compiling with `--mpy` cuts that step from 519 ms to 154 ms — **70% faster**. `boot.py` and `main.py` finish before the OTA thread connects to WiFi — your app is already running while OTA initialises in the background.
 
 ### RAM
 
