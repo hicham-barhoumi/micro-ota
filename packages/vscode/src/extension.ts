@@ -3,19 +3,36 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { execSync } from 'child_process';
 
+// ── project root resolution ───────────────────────────────────────────────────
+
+// The folder containing config/ota.json — may differ from workspace root when
+// VS Code is opened at a parent directory (e.g. the whole repo).
+let _projectRoot: string | undefined;
+
+async function resolveProjectRoot(): Promise<string | undefined> {
+    const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!wsRoot) { return undefined; }
+
+    // Fast path: workspace root is directly a micro-ota project
+    if (fs.existsSync(path.join(wsRoot, 'config', 'ota.json'))) {
+        return wsRoot;
+    }
+
+    // Slow path: search anywhere in the workspace (e.g. examples/serial/)
+    const uris = await vscode.workspace.findFiles(
+        '**/config/ota.json', '**/node_modules/**', 1
+    );
+    if (uris.length > 0) {
+        // grandparent of ota.json: …/config/ota.json → …/
+        return path.dirname(path.dirname(uris[0].fsPath));
+    }
+    return undefined;
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 function uotaPath(): string {
     return vscode.workspace.getConfiguration('micro-ota').get<string>('uotaPath', 'uota');
-}
-
-function workspaceRoot(): string | undefined {
-    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-}
-
-/** Return true if config/ota.json exists in the workspace root. */
-function hasOtaJson(root: string): boolean {
-    return fs.existsSync(path.join(root, 'config', 'ota.json'));
 }
 
 /**
@@ -27,7 +44,7 @@ function runInTerminal(args: string[], cwd?: string): void {
     if (!_terminal || _terminal.exitStatus !== undefined) {
         _terminal = vscode.window.createTerminal({
             name: 'micro-ota',
-            cwd: cwd ?? workspaceRoot(),
+            cwd: cwd ?? _projectRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
         });
     }
     _terminal.show(true);
@@ -36,7 +53,7 @@ function runInTerminal(args: string[], cwd?: string): void {
 
 /** Ask the user for a file path via QuickPick of .bin files in the workspace. */
 async function pickBinFile(): Promise<string | undefined> {
-    const root = workspaceRoot();
+    const root = _projectRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!root) { return undefined; }
     const uris = await vscode.workspace.findFiles('**/*.bin', '**/node_modules/**', 20);
     if (uris.length === 0) {
@@ -79,12 +96,12 @@ function createStatusBarItems(): vscode.StatusBarItem[] {
 // ── command handlers ──────────────────────────────────────────────────────────
 
 async function cmdInit(): Promise<void> {
-    const root = workspaceRoot();
+    const root = _projectRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!root) {
         vscode.window.showErrorMessage('micro-ota: Open a folder first.');
         return;
     }
-    if (hasOtaJson(root)) {
+    if (fs.existsSync(path.join(root, 'config', 'ota.json'))) {
         const ok = await vscode.window.showWarningMessage(
             'config/ota.json already exists. Re-initialize?', 'Yes', 'No'
         );
@@ -95,13 +112,12 @@ async function cmdInit(): Promise<void> {
     }
 }
 
-function cmdBootstrap(): void {
-    runInTerminal(['bootstrap']);
-}
-
-function cmdInfo(): void {
-    runInTerminal(['info']);
-}
+function cmdBootstrap(): void { runInTerminal(['bootstrap']); }
+function cmdInfo():      void { runInTerminal(['info']); }
+function cmdVersion():   void { runInTerminal(['version']); }
+function cmdServe():     void { runInTerminal(['serve']); }
+function cmdBundle():    void { runInTerminal(['bundle', '--zip']); }
+function cmdListen():    void { runInTerminal(['remoteio', 'listen']); }
 
 async function cmdFast(): Promise<void> {
     const transport = vscode.workspace.getConfiguration('micro-ota').get<string>('transport', 'wifi_tcp');
@@ -126,33 +142,19 @@ function cmdTerminal(): void {
     runInTerminal(['terminal', '--transport', transport]);
 }
 
-function cmdVersion(): void {
-    runInTerminal(['version']);
-}
-
 async function cmdFlash(): Promise<void> {
     const firmware = await pickBinFile();
     if (!firmware) { return; }
     runInTerminal(['flash', firmware]);
 }
 
-function cmdServe(): void {
-    runInTerminal(['serve']);
-}
-
-function cmdBundle(): void {
-    runInTerminal(['bundle', '--zip']);
-}
-
-function cmdListen(): void {
-    runInTerminal(['remoteio', 'listen']);
-}
-
 // ── install check ─────────────────────────────────────────────────────────────
 
 function isUotaInstalled(): boolean {
     try {
-        execSync('uota --version', { stdio: 'ignore', timeout: 5000 });
+        // Use which/where to check PATH — avoids relying on uota's exit code
+        const cmd = process.platform === 'win32' ? 'where uota' : 'which uota';
+        execSync(cmd, { stdio: 'ignore', timeout: 3000 });
         return true;
     } catch {
         return false;
@@ -183,24 +185,22 @@ async function promptInstall(context: vscode.ExtensionContext): Promise<void> {
 
 // ── activation ────────────────────────────────────────────────────────────────
 
-export function activate(context: vscode.ExtensionContext): void {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
     const statusBarItems = createStatusBarItems();
     statusBarItems.forEach(item => context.subscriptions.push(item));
 
-    // Show status bar buttons only when config/ota.json is present
-    const updateBar = () => {
-        const root = workspaceRoot();
-        const visible = !!(root && hasOtaJson(root));
-        statusBarItems.forEach(item => visible ? item.show() : item.hide());
+    const updateBar = async () => {
+        _projectRoot = await resolveProjectRoot();
+        statusBarItems.forEach(item => _projectRoot ? item.show() : item.hide());
     };
-    updateBar();
+
+    await updateBar();
 
     const watcher = vscode.workspace.createFileSystemWatcher('**/config/ota.json');
     watcher.onDidCreate(() => updateBar());
     watcher.onDidDelete(() => updateBar());
     context.subscriptions.push(watcher);
 
-    // Register commands
     const reg = (id: string, fn: () => void | Promise<void>) =>
         context.subscriptions.push(vscode.commands.registerCommand(id, fn));
 
@@ -219,8 +219,6 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!isUotaInstalled()) {
         promptInstall(context);
     }
-
-    console.log('micro-ota extension activated');
 }
 
 export function deactivate(): void {
