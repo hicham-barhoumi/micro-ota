@@ -41,6 +41,7 @@ _TEMPLATES = Path(__file__).parent / '_templates'
 _BOOT_PY  = (_TEMPLATES / 'boot.py').read_text()
 _MAIN_PY  = (_TEMPLATES / 'main.py').read_text()
 _APP_PY   = (_TEMPLATES / 'app.py').read_text()
+_OTA_JSON = (_TEMPLATES / 'ota.json').read_text()
 
 
 # -- error handling ------------------------------------------------------------
@@ -627,26 +628,7 @@ def cmd_init(args, cfg):
     config_dir.mkdir(exist_ok=True)
     ota_json = config_dir / 'ota.json'
     if not ota_json.exists():
-        default = {
-            "version":      "1.0.0",
-            "hostname":     "192.168.1.100",
-            "port":         2018,
-            "remoteioPort": 2019,
-            "ssid":         "",
-            "password":     "",
-            "otaKey":       "",
-            "transports":   ["wifi_tcp"],
-            "manifestUrl":  "",
-            "pullInterval": 60,
-            "fastOtaFiles": ["app/**", "main.py", "config/**"],
-            "fullOtaFiles": ["**"],
-            "excludedFiles": [
-                ".git/**", "lib/uota/**", "*.zip", "dist/**", "data/**"
-            ],
-            "mpyFiles": ["lib/**"],
-        }
-        with open(ota_json, 'w') as f:
-            json.dump(default, f, indent=4)
+        ota_json.write_text(_OTA_JSON)
         print('[init] Created config/ota.json')
     else:
         print('[init] config/ota.json already exists -- skipping')

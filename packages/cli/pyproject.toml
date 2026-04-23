@@ -26,7 +26,7 @@ uota = "uota.cli:main"
 where = ["."]
 
 [tool.setuptools.package-data]
-"uota"                     = ["_templates/*.py"]
+"uota"                     = ["_templates/*.py", "_templates/*.json"]
 "uota._device"             = ["*.py"]
 "uota._device.transports"  = ["*.py"]
 "uota.transports"          = ["*.py"]

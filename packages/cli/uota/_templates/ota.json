@@ -1,0 +1,18 @@
+{
+    "version":      "1.0.0",
+    "hostname":     "micropython.local",
+    "port":         2018,
+    "remoteioPort": 2019,
+    "ssid":         "",
+    "password":     "",
+    "otaKey":       "",
+    "transports":   ["wifi_tcp"],
+    "manifestUrl":  "",
+    "pullInterval": 60,
+    "fastOtaFiles": ["app/**", "main.py", "config/**"],
+    "fullOtaFiles": ["**"],
+    "excludedFiles": [
+        ".git/**", "lib/uota/**", "*.zip", "dist/**", "data/**"
+    ],
+    "mpyFiles": ["lib/**"]
+}
