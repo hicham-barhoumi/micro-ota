@@ -13,6 +13,7 @@ ota.json key: "bleName": "micro-ota"
 """
 
 import asyncio
+import sys
 import threading
 import time
 
@@ -53,8 +54,13 @@ class BLETransport:
         self._rx_event = threading.Event()
         self._mtu     = _CHUNK_SIZE
 
-        # Dedicated event loop in a daemon thread
-        self._loop   = asyncio.new_event_loop()
+        # Dedicated event loop in a daemon thread.
+        # On Windows, bleak's WinRT backend requires ProactorEventLoop — create
+        # it explicitly rather than relying on policy defaults across Python versions.
+        if sys.platform == 'win32':
+            self._loop = asyncio.ProactorEventLoop()
+        else:
+            self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
             target=self._loop.run_forever,
             daemon=True,
@@ -69,10 +75,16 @@ class BLETransport:
         future = asyncio.run_coroutine_threadsafe(self._connect(), self._loop)
         try:
             future.result(timeout=_SCAN_TIMEOUT + self._timeout)
-        except asyncio.TimeoutError:
-            raise TimeoutError(
-                'BLE scan timed out. Is the device advertising as "%s"?' % self._name
-            )
+        except (asyncio.TimeoutError, TimeoutError) as e:
+            msg = 'BLE scan timed out. Device "%s" not found.' % self._name
+            if sys.platform == 'win32':
+                msg += (
+                    '\n  Windows checklist:'
+                    '\n    - Bluetooth adapter enabled in Device Manager'
+                    '\n    - Device is powered on and advertising'
+                    '\n    - No other app has an exclusive BLE connection to the device'
+                )
+            raise TimeoutError(msg) from None
 
     def close(self):
         if self._client is not None:
