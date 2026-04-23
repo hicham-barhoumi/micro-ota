@@ -24,7 +24,7 @@ mkdir myproject && cd myproject
 uota init                   # creates config/ota.json, app/app.py, main.py
 ```
 
-Edit `config/ota.json` — set `ssid`, `password`, `hostname` (device IP).
+Edit `config/ota.json` — set `ssid`, `password`, `hostname` (device IP or `hostname.local` via mDNS).
 
 ```bash
 uota bootstrap              # first-time: uploads OTA library to ESP32 via USB
@@ -343,7 +343,7 @@ Location: `config/ota.json` in your project (device path: `/config/ota.json`).
 | Key | Description |
 |---|---|
 | `version` | Version string embedded in the manifest after each OTA |
-| `hostname` | Device IP for WiFi OTA and RemoteIO |
+| `hostname` | Device IP or `.local` hostname for WiFi OTA and RemoteIO (e.g. `micropython.local` resolves via mDNS on physical hosts) |
 | `port` | OTA server port (default `2018`) |
 | `remoteioPort` | RemoteIO server port (default `2019`) |
 | `ssid` / `password` | WiFi credentials (stored on device) |
