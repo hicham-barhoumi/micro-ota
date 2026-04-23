@@ -11,13 +11,20 @@ class WiFiTCPTransport:
         self._sock = None
 
     def connect(self):
-        # Resolve mDNS hostname if needed
-        try:
-            ip = socket.gethostbyname(self.host)
-        except OSError:
-            ip = self.host
+        ip = self._resolve(self.host)
         self._sock = socket.create_connection((ip, self.port), timeout=self.timeout)
         self._sock.settimeout(self.timeout)
+
+    def _resolve(self, host, retries=2):
+        # mDNS (.local) responses can be dropped — retry before giving up.
+        last_exc = None
+        for _ in range(retries):
+            try:
+                return socket.gethostbyname(host)
+            except OSError as e:
+                last_exc = e
+        # Resolution failed — return host as-is and let create_connection error
+        return host
 
     def read_line(self):
         buf = bytearray()
