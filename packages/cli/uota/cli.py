@@ -649,9 +649,9 @@ def cmd_init(args, cfg):
 
     # 5. Create boot.py
     boot_py = target / 'boot.py'
-    if not boot_py.exists():
+    if not boot_py.exists() or force:
         boot_py.write_text(_BOOT_PY)
-        print('[init] Created boot.py')
+        print('[init] {}boot.py'.format('Overwrote ' if boot_py.exists() and force else 'Created '))
 
     print('\nProject layout:')
     print('  app/           ← application code       (fast + full OTA)')
