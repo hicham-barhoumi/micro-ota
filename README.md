@@ -8,12 +8,24 @@ Push code to your ESP32 in seconds, roll back a crashed firmware automatically, 
 
 ## Install
 
+**From this repository** (no PyPI account needed):
+
 ```bash
-pip install micro-ota                   # WiFi + serial only
-pip install micro-ota[ble]              # + BLE transport (bleak)
-pip install micro-ota[flash]            # + firmware flashing (esptool)
-pip install micro-ota[all]              # everything
+pip install https://github.com/claudebarhoumi/micro-ota/raw/main/releases/micro_ota-1.0.0-py3-none-any.whl
+pip install "https://github.com/claudebarhoumi/micro-ota/raw/main/releases/micro_ota-1.0.0-py3-none-any.whl[ble]"
+pip install "https://github.com/claudebarhoumi/micro-ota/raw/main/releases/micro_ota-1.0.0-py3-none-any.whl[all]"
 ```
+
+Or clone and install locally:
+
+```bash
+git clone https://github.com/claudebarhoumi/micro-ota.git
+pip install micro-ota/releases/micro_ota-1.0.0-py3-none-any.whl
+```
+
+**VS Code extension** — download [`releases/micro-ota-1.0.0.vsix`](releases/micro-ota-1.0.0.vsix), then:
+- VS Code: `Ctrl+Shift+P` → *Extensions: Install from VSIX…*
+- or: `code --install-extension releases/micro-ota-1.0.0.vsix`
 
 ---
 
