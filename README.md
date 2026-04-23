@@ -180,6 +180,57 @@ Compiles all OTA infrastructure files to `.mpy` before the first-time upload. Re
 
 ---
 
+## Performance
+
+Measured on ESP32 (MicroPython v1.26.1, 240 MHz), comparing a bare boot against the full micro-ota stack.
+
+### Boot time
+
+Time from the first Python instruction in `boot.py` to the moment `app.run()` is called:
+
+| Scenario | Time |
+|---|---|
+| Without micro-ota | 48 ms |
+| With micro-ota — `.mpy` | **629 ms** (`.py`: 709 ms) |
+| Overhead | +581 ms |
+
+OTA import breakdown (`.py` / `.mpy`):
+
+| Step | `.py` | `.mpy` |
+|---|---|---|
+| `import boot_guard` | 44 ms | 46 ms |
+| `from ota import OTAUpdater` | 519 ms | 362 ms |
+| `boot_guard.boot()` (JSON r/w) | 97 ms | 97 ms |
+| `_thread.start_new_thread` | 2 ms | 2 ms |
+| `import app` | 47 ms | 47 ms |
+
+The dominant cost is parsing and compiling `ota.py` on every boot. Pre-compiling with `--mpy` saves ~157 ms on that step. `boot.py` and `main.py` finish before the OTA thread connects to WiFi — your app is already running while OTA initialises in the background.
+
+### RAM
+
+After all OTA modules are loaded and `OTAUpdater` is instantiated (gc-collected):
+
+| | Value |
+|---|---|
+| Total heap | 129 KB |
+| OTA stack footprint | **1.2 KB** (0.9%) |
+| App RAM budget | 109 KB (85%) |
+
+The bytecode for `boot_guard` + `ota.py` + all transports retains only ~1.2 KB of heap at runtime — temporary compilation objects are freed immediately by the GC.
+
+### CPU
+
+Tight Python loop throughput (500 ms window):
+
+| Scenario | Iterations | Overhead |
+|---|---|---|
+| No OTA thread | 28,660 | — |
+| OTA thread idle (blocked on `accept()`) | 28,656 | **< 1%** |
+
+Once the OTA server is listening, it sleeps on `socket.accept()` and releases the GIL fully. Your app runs at full Python speed.
+
+---
+
 ## Transports
 
 ### WiFi TCP (default)
