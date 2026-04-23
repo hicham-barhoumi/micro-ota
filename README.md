@@ -236,12 +236,12 @@ Once the OTA server is listening, it sleeps on `socket.accept()` and releases th
 ### WiFi TCP (default)
 
 ```json
-{ "transports": ["wifi_tcp"], "hostname": "192.168.1.100", "port": 2018 }
+{ "transports": ["wifi_tcp"], "hostname": "micropython.local", "port": 2018 }
 ```
 
 ```bash
 uota fast
-uota fast --host 192.168.1.200   # override IP
+uota fast --host mydevice.local   # override hostname
 ```
 
 ### USB Serial
@@ -280,7 +280,7 @@ The device polls a manifest URL on an interval and self-updates when the version
 ```json
 {
     "transports": ["http_pull"],
-    "manifestUrl": "http://192.168.1.50:8080/manifest.json",
+    "manifestUrl": "http://myserver.local:8080/manifest.json",
     "pullInterval": 60
 }
 ```
@@ -334,7 +334,7 @@ uota remoteio call echo msg=hello
 ```python
 from uota.remoteio import RemoteIOClient
 
-with RemoteIOClient('192.168.1.100') as rio:
+with RemoteIOClient('micropython.local') as rio:
     print(rio.call('ping'))         # 'pong'
     print(rio.call('free_mem'))     # 98304
     print(rio.call('uptime_ms'))    # 12345
@@ -374,7 +374,7 @@ Location: `config/ota.json` in your project (device path: `/config/ota.json`).
 ```json
 {
     "version":      "1.0.0",
-    "hostname":     "192.168.1.100",
+    "hostname":     "micropython.local",
     "port":         2018,
     "remoteioPort": 2019,
     "ssid":         "MyWiFi",
