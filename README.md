@@ -329,16 +329,50 @@ Leave `otaKey` empty (the default) to disable signing.
 
 ## RemoteIO
 
-A persistent side-channel on port 2019 for streaming `print()` output and calling named handlers on the device.
+A persistent TCP side-channel on port 2019 for two things: streaming all `print()` output from the device to your terminal in real time, and calling named RPC handlers on the device from the host.
+
+### Enable in boot.py
+
+RemoteIO is opt-in. Add a second thread to your `boot.py`:
+
+```python
+import _thread
+
+def _remoteio():
+    try:
+        import remoteio
+        remoteio.run()
+    except Exception as e:
+        print('[RemoteIO] Failed:', e)
+
+_thread.start_new_thread(_remoteio, ())
+```
+
+Requires `LWIP_MAX_SOCKETS >= 2` in the firmware (standard ESP32 builds have this).
 
 ### CLI
 
 ```bash
-uota remoteio listen                    # stream all device print() output
-uota remoteio call ping
-uota remoteio call free_mem
-uota remoteio call version
-uota remoteio call echo msg=hello
+# Stream all device print() output live
+uota remoteio listen
+
+# Call built-in handlers
+uota remoteio call ping                 # → "pong"
+uota remoteio call uptime_ms            # → 35712
+uota remoteio call free_mem             # → 98304
+uota remoteio call version              # → {"version": "1.0.0"}
+
+# Call a custom handler with arguments
+uota remoteio call set_led state=true
+uota remoteio call set_led state=false
+```
+
+The `listen` command blocks and prints everything the device `print()`s — useful for debugging without opening a serial terminal:
+
+```
+[12:04:01] app started
+[12:04:02] sensor: 24.3 °C  61% RH
+[12:04:07] sensor: 24.4 °C  61% RH
 ```
 
 ### Python API
@@ -347,9 +381,23 @@ uota remoteio call echo msg=hello
 from uota.remoteio import RemoteIOClient
 
 with RemoteIOClient('micropython.local') as rio:
-    print(rio.call('ping'))         # 'pong'
-    print(rio.call('free_mem'))     # 98304
-    print(rio.call('uptime_ms'))    # 12345
+    print(rio.call('ping'))             # 'pong'
+    print(rio.call('uptime_ms'))        # 35712
+    print(rio.call('free_mem'))         # 98304
+    print(rio.call('set_led', state=True))   # 'ok'
+```
+
+Use it in scripts for automated testing or monitoring:
+
+```python
+from uota.remoteio import RemoteIOClient
+import time
+
+with RemoteIOClient('micropython.local') as rio:
+    for _ in range(10):
+        data = rio.call('sensor_data')
+        print(f"temp={data['temp']}  hum={data['humidity']}")
+        time.sleep(2)
 ```
 
 ### Registering handlers on the device
@@ -357,25 +405,43 @@ with RemoteIOClient('micropython.local') as rio:
 ```python
 # app/app.py
 import uota.remoteio as remoteio
+from machine import Pin, ADC
 
-@remoteio.on('sensor_data')
-def _():
-    return {'temp': read_temp(), 'humidity': read_hum()}
+led = Pin(2, Pin.OUT)
+adc = ADC(Pin(34))
 
 @remoteio.on('set_led')
 def _(state=False):
-    led.value(state)
+    led.value(int(state))
     return 'ok'
+
+@remoteio.on('sensor_data')
+def _():
+    raw = adc.read()
+    volts = raw * 3.3 / 4095
+    return {'raw': raw, 'volts': round(volts, 3)}
+
+@remoteio.on('reset')
+def _():
+    import machine
+    machine.reset()
+```
+
+Then from the host:
+
+```bash
+uota remoteio call set_led state=true
+uota remoteio call sensor_data          # → {"raw": 1820, "volts": 1.468}
 ```
 
 ### Built-in handlers
 
 | Name | Returns |
 |---|---|
-| `ping` | `'pong'` |
-| `version` | `{"version": "x.y.z"}` |
-| `free_mem` | free heap bytes |
-| `uptime_ms` | ms since boot |
+| `ping` | `"pong"` |
+| `version` | installed OTA version string |
+| `free_mem` | free heap bytes (int) |
+| `uptime_ms` | milliseconds since boot (int) |
 
 ---
 
