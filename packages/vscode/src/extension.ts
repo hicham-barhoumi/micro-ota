@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import { execSync } from 'child_process';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -147,6 +148,39 @@ function cmdListen(): void {
     runInTerminal(['remoteio', 'listen']);
 }
 
+// ── install check ─────────────────────────────────────────────────────────────
+
+function isUotaInstalled(): boolean {
+    try {
+        execSync('uota --version', { stdio: 'ignore', timeout: 5000 });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+async function promptInstall(context: vscode.ExtensionContext): Promise<void> {
+    const wheelPath = context.asAbsolutePath(path.join('bin', 'micro_ota-latest.whl'));
+    const bundled   = fs.existsSync(wheelPath);
+
+    const action = await vscode.window.showWarningMessage(
+        'micro-ota: the uota CLI is not installed.',
+        bundled ? 'Install now' : 'Show instructions',
+        'Ignore'
+    );
+
+    if (action === 'Install now') {
+        const pip = process.platform === 'win32' ? 'pip' : 'pip3';
+        const t = vscode.window.createTerminal({ name: 'micro-ota install' });
+        t.show();
+        t.sendText(`${pip} install "${wheelPath}"`);
+    } else if (action === 'Show instructions') {
+        vscode.env.openExternal(vscode.Uri.parse(
+            'https://github.com/claudebarhoumi/micro-ota#install'
+        ));
+    }
+}
+
 // ── activation ────────────────────────────────────────────────────────────────
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -181,6 +215,10 @@ export function activate(context: vscode.ExtensionContext): void {
     reg('micro-ota.serve',     cmdServe);
     reg('micro-ota.bundle',    cmdBundle);
     reg('micro-ota.listen',    cmdListen);
+
+    if (!isUotaInstalled()) {
+        promptInstall(context);
+    }
 
     console.log('micro-ota extension activated');
 }

@@ -119,13 +119,32 @@ def build_vscode():
     info('compiling TypeScript…')
     _run(npm, 'run', 'compile', cwd=VS_DIR)
 
+    # Bundle the pip wheel inside the vsix so the extension can auto-install
+    # uota if it is not already on PATH.  The wheel is staged as
+    # packages/vscode/bin/micro_ota-latest.whl (version-agnostic name) and
+    # removed after packaging.
+    bin_dir = VS_DIR / 'bin'
+    staged_wheel = bin_dir / 'micro_ota-latest.whl'
+    wheels = sorted(DIST.glob('micro_ota-*.whl'), reverse=True)
+    if wheels:
+        bin_dir.mkdir(exist_ok=True)
+        shutil.copy(wheels[0], staged_wheel)
+        info('bundling wheel: %s → bin/micro_ota-latest.whl' % wheels[0].name)
+    else:
+        info('no wheel found in dist/ — vsix will not bundle pip package')
+
     info('packaging extension…')
     npm_bin = str(Path(npm).parent)
     npx = str(Path(npm).parent / 'npx')
-    # Ensure the nvm Node bin is first on PATH so vsce uses the right node
     import os as _os
     env = {**_os.environ, 'PATH': npm_bin + _os.pathsep + _os.environ.get('PATH', '')}
-    _run(npx, 'vsce', 'package', '--out', str(DIST), cwd=VS_DIR, env=env)
+    try:
+        _run(npx, 'vsce', 'package', '--out', str(DIST), cwd=VS_DIR, env=env)
+    finally:
+        if staged_wheel.exists():
+            staged_wheel.unlink()
+        if bin_dir.exists() and not any(bin_dir.iterdir()):
+            bin_dir.rmdir()
 
     ok('VS Code extension built')
 
