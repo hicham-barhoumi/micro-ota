@@ -325,13 +325,17 @@ class SerialOTATransport:
     def close(self):
         if self._ser and self._ser.is_open:
             try:
-                # Ctrl-C stops the inline server loop; Ctrl-B exits raw REPL;
-                # Ctrl-D soft-resets so boot.py restarts the OTA/WiFi threads.
-                self._ser.write(b'\x03\x02')
+                # Ctrl-C stops the inline server loop, leaving device in raw REPL.
+                # machine.reset() (hard reset) is used instead of soft reset (Ctrl-D)
+                # so the LWIP socket pool is fully cleared — soft reset leaves dangling
+                # LWIP sockets from background OTA/RemoteIO threads, which exhaust the
+                # pool (LWIP_MAX_SOCKETS=10) after a few serial OTA sessions.
+                self._ser.write(b'\x03')
                 self._ser.flush()
-                time.sleep(0.1)
-                self._ser.write(b'\x04')
+                time.sleep(0.2)
+                self._ser.write(b'import machine;machine.reset()\x04')
                 self._ser.flush()
+                time.sleep(0.5)
             except Exception:
                 pass
             self._ser.close()

@@ -1,16 +1,16 @@
 {
     "version": "1.0.0",
-    "hostname": "192.168.137.115",
+    "hostname": "192.168.137.186",
     "port": 2018,
     "remoteioPort": 2019,
     "ssid": "YOUR_WIFI_SSID",
     "password": "YOUR_WIFI_PASSWORD",
     "otaKey": "",
     "transports": [
-        "serial",
-        "wifi_tcp"
+        "wifi_tcp",
+        "http_pull"
     ],
-    "manifestUrl": "",
+    "manifestUrl": "http://192.168.249.128:8080/manifest.json",
     "pullInterval": 60,
     "fastOtaFiles": ["app/**", "main.py", "boot.py", "config/**"],
     "fullOtaFiles": ["**"],

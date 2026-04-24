@@ -57,7 +57,7 @@ def _http_get(url, stream_to=None, timeout=15):
                 break
             hdr += chunk
         header_end = hdr.find(b'\r\n\r\n')
-        status_line = hdr[:hdr.find(b'\r\n')].decode(errors='replace')
+        status_line = hdr[:hdr.find(b'\r\n')].decode('utf-8', 'replace')
         if '200' not in status_line:
             raise OSError('HTTP error: ' + status_line)
 
@@ -121,14 +121,16 @@ def _remove_tree(path):
         pass
 
 
-def _walk(d):
-    """Yield (full_path, path_relative_to_d) for every file under d."""
+def _walk(d, root=None):
+    """Yield (full_path, path_relative_to_root) for every file under d."""
+    if root is None:
+        root = d
     for entry in os.listdir(d):
         full = d + '/' + entry
         if _is_dir(full):
-            yield from _walk(full)
+            yield from _walk(full, root)
         else:
-            yield full, full[len(d):]   # rel keeps leading /
+            yield full, full[len(root):]   # rel keeps leading /
 
 
 def _sha256_file(path):
