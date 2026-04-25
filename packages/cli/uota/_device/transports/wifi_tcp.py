@@ -13,14 +13,10 @@ class WiFiTCPTransport:
 
     def start(self):
         self._connect_wifi()
-        if self._server:
-            try:
-                self._server.close()
-            except Exception:
-                pass
-            self._server = None
+        if self._server is not None:
+            return   # socket already open — reuse it
         import gc
-        gc.collect()   # free any zombie socket objects before allocating a new one
+        gc.collect()
         try:
             self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         except OSError as e:
@@ -47,7 +43,8 @@ class WiFiTCPTransport:
 
     def _connect_wifi(self):
         sta = network.WLAN(network.STA_IF)
-        sta.active(True)
+        if not sta.active():
+            sta.active(True)
         if sta.isconnected():
             print('[OTA] WiFi already connected:', sta.ifconfig()[0])
             return

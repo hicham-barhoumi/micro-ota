@@ -697,7 +697,16 @@ class OTAUpdater:
             try:
                 transport.start()
                 while True:
-                    conn = transport.accept()
+                    try:
+                        conn = transport.accept()
+                    except OSError as e:
+                        # ETIMEDOUT / EAGAIN — no client yet, keep the server
+                        # socket open and retry.  Re-raising would trigger a
+                        # full stop/start cycle which re-creates the socket and
+                        # re-invokes the network stack on every poll interval.
+                        if e.args[0] in (116, 11):
+                            continue
+                        raise
                     try:
                         # Loop commands on the same connection until peer closes it.
                         # This avoids TCP TIME_WAIT socket exhaustion from
