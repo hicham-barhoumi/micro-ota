@@ -14,17 +14,10 @@ ota.json keys:
   "bleName": "micro-ota"    # BLE advertisement name (max ~20 chars)
 """
 
-import ubluetooth
 import time
 
-# ── NUS service definition ────────────────────────────────────────────────────
-
-_SVC  = ubluetooth.UUID('6E400001-B5A3-F393-E0A9-E50E24DCCA9E')
-_RX   = ubluetooth.UUID('6E400002-B5A3-F393-E0A9-E50E24DCCA9E')
-_TX   = ubluetooth.UUID('6E400003-B5A3-F393-E0A9-E50E24DCCA9E')
-
 _F_WRITE    = 0x0008
-_F_WRITE_NR = 0x0004   # write without response (faster)
+_F_WRITE_NR = 0x0004
 _F_READ     = 0x0002
 _F_NOTIFY   = 0x0010
 
@@ -47,7 +40,7 @@ class _BLEConn:
         self._ble  = ble
         self._conn = conn_handle
         self._tx   = tx_handle
-        self._mtu  = max(20, initial_mtu - 3)  # payload per notify
+        self._mtu  = max(20, initial_mtu - 3)
         self._buf  = bytearray()
         self._closed = False
 
@@ -81,7 +74,7 @@ class _BLEConn:
             self._ble.gatts_notify(self._conn, self._tx, chunk)
             offset += self._mtu
             if offset < len(data):
-                time.sleep_ms(10)  # give BLE stack time to flush
+                time.sleep_ms(10)
 
     def close(self):
         self._closed = True
@@ -104,17 +97,24 @@ class BLETransport:
     """
 
     def __init__(self, name='micro-ota'):
-        self._name     = name[:20]   # BLE name length limit
-        self._ble      = ubluetooth.BLE()
-        self._rx_h     = None        # GATT handle: RX characteristic
-        self._tx_h     = None        # GATT handle: TX characteristic
-        self._conn     = None        # current _BLEConn (or None)
-        self._pending  = None        # set by IRQ when a new client connects
-        self._mtu      = 20          # updated by MTU exchange IRQ
+        self._name    = name[:20]
+        self._ble     = None
+        self._rx_h    = None
+        self._tx_h    = None
+        self._conn    = None
+        self._pending = None
+        self._mtu     = 20
 
     # ── transport interface ───────────────────────────────────────────────────
 
     def start(self):
+        # Import ubluetooth lazily so that merely having this file on the
+        # device does not initialise the BLE hardware stack.
+        import ubluetooth
+        self._SVC = ubluetooth.UUID('6E400001-B5A3-F393-E0A9-E50E24DCCA9E')
+        self._RX  = ubluetooth.UUID('6E400002-B5A3-F393-E0A9-E50E24DCCA9E')
+        self._TX  = ubluetooth.UUID('6E400003-B5A3-F393-E0A9-E50E24DCCA9E')
+        self._ble = ubluetooth.BLE()
         self._ble.active(True)
         self._ble.irq(self._irq)
         self._register()
@@ -123,7 +123,8 @@ class BLETransport:
 
     def stop(self):
         try:
-            self._ble.active(False)
+            if self._ble:
+                self._ble.active(False)
         except Exception:
             pass
 
@@ -140,19 +141,17 @@ class BLETransport:
 
     def _register(self):
         svc_def = (
-            _SVC,
+            self._SVC,
             (
-                (_RX, _F_WRITE | _F_WRITE_NR),
-                (_TX, _F_READ  | _F_NOTIFY),
+                (self._RX, _F_WRITE | _F_WRITE_NR),
+                (self._TX, _F_READ  | _F_NOTIFY),
             ),
         )
         ((self._rx_h, self._tx_h),) = self._ble.gatts_register_services((svc_def,))
 
     def _advertise(self):
         name_b  = self._name.encode()
-        # AD structures: flags + NUS service UUID + complete local name
         flags   = b'\x02\x01\x06'
-        # 128-bit UUID in little-endian (reversed)
         svc_uuid = bytes(reversed(bytes.fromhex(
             '6E400001B5A3F393E0A9E50E24DCCA9E'
         )))
