@@ -12,7 +12,7 @@
     "fastOtaFiles": ["app/**", "main.py", "config/**"],
     "fullOtaFiles": ["**"],
     "excludedFiles": [
-        ".git/**", "lib/uota/**", "*.zip", "dist/**", "data/**"
+        ".git/**", "*.zip", "dist/**"
     ],
     "mpyFiles": ["lib/**"]
 }

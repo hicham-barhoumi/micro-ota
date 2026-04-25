@@ -15,7 +15,7 @@
     "fastOtaFiles": ["app/**", "main.py", "boot.py", "config/**"],
     "fullOtaFiles": ["**"],
     "excludedFiles": [
-        ".git/**", "dist/**"
+        ".git/**", "*.zip", "dist/**"
     ],
     "mpyFiles": ["lib/**"]
 }
