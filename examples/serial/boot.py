@@ -24,5 +24,7 @@ def _remoteio():
     except Exception as _e:
         print('[RemoteIO] Failed to start:', _e)
 
+_thread.stack_size(16384)
 _thread.start_new_thread(_ota, ())
+_thread.stack_size(4096)
 _thread.start_new_thread(_remoteio, ())
