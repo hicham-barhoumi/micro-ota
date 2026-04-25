@@ -363,17 +363,9 @@ def send_stream_ota(transport, files, manifest, key='', wipe=False):
         if _ser:
             _ser.timeout = max(getattr(_ser, 'timeout', 15), 60)
 
+        resp    = transport.read_line().strip()
         elapsed = time.time() - start
-        try:
-            resp = transport.read_line().strip()
-        except Exception:
-            # Device reset immediately after committing — TCP RST races the
-            # 'ok' response.  All bytes were already delivered (100% above),
-            # so treat a post-transfer connection drop as a successful update.
-            print('Done in {:.1f}s'.format(elapsed))
-            return
-
-        if resp in ('ok', ''):
+        if resp == 'ok':
             print('Done in {:.1f}s'.format(elapsed))
         elif resp == 'sig_mismatch':
             print('ERROR: HMAC signature mismatch -- update rejected')

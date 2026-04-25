@@ -215,6 +215,8 @@ def _handle_ota(conn, cfg):
             if header == b'end_ota':
                 _commit(new_manifest, staged)
                 _send(conn, 'ok\n')
+                try: conn.close()
+                except Exception: pass
                 time.sleep(0.3)
                 machine.reset()
                 return
@@ -416,6 +418,8 @@ def _handle_stream_ota(conn, cfg):
 
         _commit(new_manifest, list(new_manifest['files'].keys()))
         _send(conn, 'ok\n')
+        try: conn.close()
+        except Exception: pass
         time.sleep(0.3)
         machine.reset()
 
@@ -489,6 +493,8 @@ def _handle(conn, cfg):
 
     elif cmd == b'reset':
         _send(conn, 'ok\n')
+        try: conn.close()
+        except Exception: pass
         time.sleep(0.3)
         machine.reset()
 
