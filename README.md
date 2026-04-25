@@ -11,15 +11,15 @@ Push code to your ESP32 in seconds, roll back a crashed firmware automatically, 
 **From this repository** (no PyPI account needed):
 
 ```bash
-pip install https://github.com/claudebarhoumi/micro-ota/raw/main/releases/micro_ota-1.0.0-py3-none-any.whl
-pip install "https://github.com/claudebarhoumi/micro-ota/raw/main/releases/micro_ota-1.0.0-py3-none-any.whl[ble]"
-pip install "https://github.com/claudebarhoumi/micro-ota/raw/main/releases/micro_ota-1.0.0-py3-none-any.whl[all]"
+pip install https://github.com/hicham-barhoumi/micro-ota/raw/main/releases/micro_ota-1.0.0-py3-none-any.whl
+pip install "https://github.com/hicham-barhoumi/micro-ota/raw/main/releases/micro_ota-1.0.0-py3-none-any.whl[ble]"
+pip install "https://github.com/hicham-barhoumi/micro-ota/raw/main/releases/micro_ota-1.0.0-py3-none-any.whl[all]"
 ```
 
 Or clone and install locally:
 
 ```bash
-git clone https://github.com/claudebarhoumi/micro-ota.git
+git clone https://github.com/hicham-barhoumi/micro-ota.git
 pip install micro-ota/releases/micro_ota-1.0.0-py3-none-any.whl
 ```
 
