@@ -16,14 +16,27 @@ class WiFiTCPTransport:
         self._sock.settimeout(self.timeout)
 
     def _resolve(self, host, retries=2):
-        # mDNS (.local) responses can be dropped — retry before giving up.
-        last_exc = None
-        for _ in range(retries):
+        # Use getaddrinfo: unlike gethostbyname, it goes through the full OS
+        # resolver stack on Windows (GetAddrInfoW), which supports mDNS .local
+        # names without requiring a separate Bonjour service.
+        def _try(h):
             try:
-                return socket.gethostbyname(host)
-            except OSError as e:
-                last_exc = e
-        # Resolution failed — return host as-is and let create_connection error
+                return socket.getaddrinfo(h, None)[0][-1][0]
+            except OSError:
+                return None
+
+        for _ in range(retries):
+            ip = _try(host)
+            if ip:
+                return ip
+
+        # Bare name (no dots): try appending .local for mDNS devices.
+        if '.' not in host:
+            for _ in range(retries):
+                ip = _try(host + '.local')
+                if ip:
+                    return ip
+
         return host
 
     def read_line(self):
