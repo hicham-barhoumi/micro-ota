@@ -667,12 +667,6 @@ class OTAUpdater:
                         timeout=cfg.get('pullTimeout', 15),
                     ))
                 elif name == 'ble':
-                    try:
-                        open('/ble_canary').close()
-                        print('[OTA] BLE skipped: previous activation crashed. Delete /ble_canary to retry.')
-                        continue
-                    except OSError:
-                        pass
                     from transports.ble import BLETransport
                     result.append(BLETransport(
                         name=cfg.get('bleName', 'micro-ota'),

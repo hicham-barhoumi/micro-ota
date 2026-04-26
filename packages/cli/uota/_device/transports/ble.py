@@ -115,12 +115,7 @@ class BLETransport:
         self._RX  = ubluetooth.UUID('6E400002-B5A3-F393-E0A9-E50E24DCCA9E')
         self._TX  = ubluetooth.UUID('6E400003-B5A3-F393-E0A9-E50E24DCCA9E')
         self._ble = ubluetooth.BLE()
-        # Write canary before active(True): if firmware panics, canary persists
-        # and _make_transports skips BLE on next boot.
-        with open('/ble_canary', 'w') as _f:
-            _f.write('1')
         self._ble.active(True)
-        import os; os.remove('/ble_canary')
         self._ble.irq(self._irq)
         self._register()
         self._advertise()

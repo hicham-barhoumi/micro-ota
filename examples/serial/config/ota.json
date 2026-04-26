@@ -7,8 +7,7 @@
     "password": "YOUR_WIFI_PASSWORD",
     "otaKey": "",
     "transports": [
-        "ble",
-        "http_pull"
+        "ble"
     ],
     "manifestUrl": "http://192.168.249.128:8080/manifest.json",
     "pullInterval": 60,
@@ -17,5 +16,5 @@
     "excludedFiles": [
         ".git/**", "*.zip", "dist/**"
     ],
-    "mpyFiles": ["lib/**"]
+    "mpyFiles": ["libp/**"]
 }
