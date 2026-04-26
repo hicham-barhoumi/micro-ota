@@ -7,7 +7,7 @@
     "password": "YOUR_WIFI_PASSWORD",
     "otaKey": "",
     "transports": [
-        "wifi_tcp",
+        "ble",
         "http_pull"
     ],
     "manifestUrl": "http://192.168.249.128:8080/manifest.json",
