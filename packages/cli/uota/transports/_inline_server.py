@@ -203,13 +203,6 @@ except Exception:
 
 STAGE_DIR = '/ota_stage'
 
-PROTECTED = frozenset([
-    'lib',      # OTA system (/lib/uota/) — managed by bootstrap
-    'data',     # runtime data — never wiped
-    'config',   # device config (/config/ota.json …) — synced via OTA, never wiped
-    # OTA manifest/state files at root
-    'boot.py', 'ota_manifest.json', 'ota_version.json', 'ota_boot_state.json',
-])
 
 
 def commit(manifest):
@@ -468,15 +461,7 @@ def handle_command(conn):
 
     elif cmd == b'wipe':
         for item in os.listdir('/'):
-            if item not in PROTECTED:
-                remove_tree('/' + item)
-        # Clean legacy flat files inside /lib that are not part of /lib/uota/
-        try:
-            for item in os.listdir('/lib'):
-                if item != 'uota':
-                    remove_tree('/lib/' + item)
-        except Exception:
-            pass
+            remove_tree('/' + item)
         send(conn, 'ok\n')
 
     else:

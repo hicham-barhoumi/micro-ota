@@ -10,7 +10,7 @@ Protocol (all text lines are \n terminated):
   get <path>                   → <size>\n<binary>
   rm <path>                    → ok / error
   reset                        → ok  (then resets)
-  wipe                         → ok  (deletes user files, keeps OTA lib)
+  wipe                         → ok  (deletes all files from the filesystem)
   start_ota                    → ready  (enters OTA session)
     manifest <size>\n<json>    → ok
     file <name>;<size>;<sha256>\n<binary>  → ok / sha256_mismatch
@@ -30,13 +30,6 @@ import _thread
 _STAGE   = '/ota_stage'
 _MANIFEST = '/ota_manifest.json'
 _VERSION  = '/ota_version.json'
-_PROTECTED = frozenset([
-    'lib',      # OTA system (/lib/uota/) — managed by bootstrap
-    'data',     # runtime data — never wiped
-    'config',   # device config (/config/ota.json …) — synced via OTA, never wiped
-    # OTA manifest/state files at root
-    'boot.py', 'ota_manifest.json', 'ota_version.json', 'ota_boot_state.json',
-])
 
 
 # ── HMAC-SHA256 (pure Python — MicroPython has no hmac module) ────────────────
@@ -290,8 +283,6 @@ def _commit(new_manifest, staged):
 
     new_files = set(new_manifest.get('files', {}).keys()) if new_manifest else set()
     for rel in old_files - new_files:
-        if rel.lstrip('/').split('/')[0] in _PROTECTED:
-            continue
         path = '/' + rel.lstrip('/')
         try:
             os.remove(path)
@@ -500,15 +491,7 @@ def _handle(conn, cfg):
 
     elif cmd == b'wipe':
         for item in os.listdir('/'):
-            if item not in _PROTECTED:
-                _remove_tree('/' + item)
-        # Clean legacy flat files inside /lib that are not part of /lib/uota/
-        try:
-            for item in os.listdir('/lib'):
-                if item != 'uota':
-                    _remove_tree('/lib/' + item)
-        except Exception:
-            pass
+            _remove_tree('/' + item)
         _send(conn, 'ok\n')
 
     else:
