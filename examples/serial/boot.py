@@ -8,13 +8,7 @@ import boot_guard
 from ota import OTAUpdater
 boot_guard.boot()
 
-# Activate WiFi in the main thread before any threads are started.
-# sta.active(True) triggers ESP-IDF's BLE coexistence init; doing it here
-# while no thread stacks are allocated gives the firmware maximum heap to
-# work with and prevents the BLE_INIT crash seen under memory pressure.
-import network as _net
-_net.WLAN(_net.STA_IF).active(True)
-del _net
+OTAUpdater.activate_hardware()
 
 import _thread
 

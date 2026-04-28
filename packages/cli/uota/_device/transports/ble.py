@@ -97,34 +97,38 @@ class BLETransport:
     """
 
     def __init__(self, name='micro-ota'):
-        self._name    = name[:20]
-        self._ble     = None
-        self._rx_h    = None
-        self._tx_h    = None
-        self._conn    = None
-        self._pending = None
-        self._mtu     = 20
+        self._name       = name[:20]
+        self._ble        = None
+        self._rx_h       = None
+        self._tx_h       = None
+        self._conn       = None
+        self._pending    = None
+        self._mtu        = 20
+        self._registered = False
 
     # ── transport interface ───────────────────────────────────────────────────
 
     def start(self):
-        # Import ubluetooth lazily so that merely having this file on the
-        # device does not initialise the BLE hardware stack.
         import ubluetooth
         self._SVC = ubluetooth.UUID('6E400001-B5A3-F393-E0A9-E50E24DCCA9E')
         self._RX  = ubluetooth.UUID('6E400002-B5A3-F393-E0A9-E50E24DCCA9E')
         self._TX  = ubluetooth.UUID('6E400003-B5A3-F393-E0A9-E50E24DCCA9E')
         self._ble = ubluetooth.BLE()
-        self._ble.active(True)
         self._ble.irq(self._irq)
-        self._register()
+        if not self._registered:
+            self._register()
+            self._registered = True
         self._advertise()
         print('[BLE] Advertising as "%s"' % self._name)
 
     def stop(self):
+        # Stop advertising only — do not deactivate BLE hardware.
+        # The hardware was activated in the main thread and must stay up so
+        # that _run_transport can restart this transport without cycling
+        # ble.active() from the OTA thread (which causes an HCI error).
         try:
             if self._ble:
-                self._ble.active(False)
+                self._ble.gap_advertise(None)
         except Exception:
             pass
 
@@ -150,14 +154,15 @@ class BLETransport:
         ((self._rx_h, self._tx_h),) = self._ble.gatts_register_services((svc_def,))
 
     def _advertise(self):
-        name_b  = self._name.encode()
-        flags   = b'\x02\x01\x06'
-        svc_uuid = bytes(reversed(bytes.fromhex(
-            '6E400001B5A3F393E0A9E50E24DCCA9E'
-        )))
-        uuid_ad  = bytes([len(svc_uuid) + 1, 0x07]) + svc_uuid
-        name_ad  = bytes([len(name_b) + 1, 0x09]) + name_b
-        self._ble.gap_advertise(100_000, adv_data=flags + uuid_ad + name_ad)
+        # BLE advertising data is limited to 31 bytes.
+        # flags(3) + name_ad(2+len) fits easily; the 16-byte UUID goes in
+        # scan response to avoid exceeding the limit.
+        name_b   = self._name.encode()
+        flags    = b'\x02\x01\x06'
+        svc_uuid = bytes(reversed(bytes.fromhex('6E400001B5A3F393E0A9E50E24DCCA9E')))
+        adv_data  = flags + bytes([len(name_b) + 1, 0x09]) + name_b
+        resp_data = bytes([len(svc_uuid) + 1, 0x07]) + svc_uuid
+        self._ble.gap_advertise(100_000, adv_data=adv_data, resp_data=resp_data)
 
     # ── IRQ handler ───────────────────────────────────────────────────────────
 

@@ -616,6 +616,26 @@ class OTAUpdater:
         except OSError:
             return {}
 
+    @staticmethod
+    def activate_hardware():
+        """Activate radios that OTA needs. Must be called from the main thread.
+        Only activates what is configured — avoid activating WiFi on BLE-only
+        boards: BLE+WiFi coexist init consumes enough heap to prevent thread
+        creation, and the BLE stack init itself aborts when WiFi is already up."""
+        try:
+            import json as _json
+            with open('/config/ota.json') as _f:
+                _cfg = _json.load(_f)
+        except Exception:
+            _cfg = {}
+        _t = _cfg.get('transports', ['wifi_tcp'])
+        if any(x in _t for x in ('wifi_tcp', 'http_pull', 'serial')):
+            import network as _net
+            _net.WLAN(_net.STA_IF).active(True)
+        if 'ble' in _t:
+            import ubluetooth as _ub
+            _ub.BLE().active(True)
+
     def _make_transports(self):
         """Return a list of all configured transports that can be instantiated."""
         cfg = self._config
@@ -683,22 +703,15 @@ class OTAUpdater:
                     try:
                         conn = transport.accept()
                     except OSError as e:
-                        # ETIMEDOUT / EAGAIN — no client yet, keep the server
-                        # socket open and retry.  Re-raising would trigger a
-                        # full stop/start cycle which re-creates the socket and
-                        # re-invokes the network stack on every poll interval.
                         if e.args[0] in (116, 11):
                             continue
                         raise
                     try:
-                        # Loop commands on the same connection until peer closes it.
-                        # This avoids TCP TIME_WAIT socket exhaustion from
-                        # per-command connect/disconnect cycles.
                         while True:
                             try:
                                 _handle(conn, self._config)
                             except EOFError:
-                                break  # peer closed cleanly
+                                break
                             except Exception as e:
                                 print('[OTA] Handler error:', e)
                                 break
