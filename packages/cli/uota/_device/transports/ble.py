@@ -61,7 +61,7 @@ class _BLEConn:
                 raise OSError('BLE recv timeout')
             time.sleep_ms(5)
         chunk = bytes(self._buf[:n])
-        del self._buf[:n]
+        self._buf[:n] = b''  # del self._buf[:n] is not supported in MicroPython
         return chunk
 
     def sendall(self, data):
