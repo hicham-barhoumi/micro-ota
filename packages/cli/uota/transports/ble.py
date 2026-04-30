@@ -187,12 +187,18 @@ class BLETransport:
             pass
 
     async def _write_chunks(self, data):
+        import asyncio as _asyncio
         view   = memoryview(data)
         offset = 0
         while offset < len(data):
             chunk = bytes(view[offset:offset + self._mtu])
             await self._client.write_gatt_char(_NUS_RX, chunk, response=True)
             offset += self._mtu
+            # Give the device's MicroPython BLE IRQ handler time to process each
+            # packet before the next arrives — the ATT ACK is sent by the BLE
+            # hardware before MicroPython sees the IRQ, so without this delay the
+            # event queue overflows and packets are silently dropped.
+            await _asyncio.sleep(0.012)
 
     def _on_notify(self, _handle, data: bytearray):
         """Called by bleak in the event loop thread when the device sends data."""
