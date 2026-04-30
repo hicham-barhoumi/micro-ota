@@ -152,6 +152,12 @@ class BLETransport:
             ),
         )
         ((self._rx_h, self._tx_h),) = self._ble.gatts_register_services((svc_def,))
+        # Default GATT attribute buffer is 20 bytes; ATT writes from the host are
+        # up to MTU-3 = 253 bytes.  Without this, Bluedroid silently truncates
+        # every write to 20 bytes and still sends the ATT WRITE RESPONSE, so the
+        # host reports 100% while the device receives ~8% of the stream.
+        self._ble.gatts_set_buffer(self._rx_h, 512)
+        print('[BLE] RX buffer set to 512 bytes')
 
     def _advertise(self):
         # BLE advertising data is limited to 31 bytes.
