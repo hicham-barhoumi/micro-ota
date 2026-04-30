@@ -191,10 +191,8 @@ class BLETransport:
         offset = 0
         while offset < len(data):
             chunk = bytes(view[offset:offset + self._mtu])
-            await self._client.write_gatt_char(_NUS_RX, chunk, response=False)
+            await self._client.write_gatt_char(_NUS_RX, chunk, response=True)
             offset += self._mtu
-            if offset < len(data):
-                await asyncio.sleep(0.01)   # brief pause to avoid BLE stack overflow
 
     def _on_notify(self, _handle, data: bytearray):
         """Called by bleak in the event loop thread when the device sends data."""
