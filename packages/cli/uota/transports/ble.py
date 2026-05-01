@@ -23,6 +23,7 @@ _NUS_TX = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E'   # device → host (notify)
 _SCAN_TIMEOUT  = 10.0   # seconds to scan for device
 _RECV_TIMEOUT  = 30.0   # seconds to wait for data
 _CHUNK_SIZE    = 20     # conservative MTU payload (negotiated at runtime)
+_WINDOW        = 512    # flow-control window in bytes (must match device _WINDOW)
 
 
 def _require_bleak():
@@ -53,6 +54,7 @@ class BLETransport:
         self._rx_lock = threading.Lock()
         self._rx_event = threading.Event()
         self._mtu     = _CHUNK_SIZE
+        self._ack_sem = None  # asyncio.Semaphore for flow-control credits
 
         # Dedicated event loop in a daemon thread.
         # On Windows, bleak's WinRT backend requires ProactorEventLoop — create
@@ -176,6 +178,8 @@ class BLETransport:
         except AttributeError:
             pass
 
+        self._ack_sem = asyncio.Semaphore(0)
+
         # Subscribe to TX notifications (device → host)
         await self._client.start_notify(_NUS_TX, self._on_notify)
         print('[BLE] Connected. MTU payload=%d bytes' % self._mtu)
@@ -187,15 +191,28 @@ class BLETransport:
             pass
 
     async def _write_chunks(self, data):
-        view   = memoryview(data)
-        offset = 0
+        view         = memoryview(data)
+        offset       = 0
+        window_sent  = 0
         while offset < len(data):
-            chunk = bytes(view[offset:offset + self._mtu])
-            await self._client.write_gatt_char(_NUS_RX, chunk, response=True)
-            offset += self._mtu
+            end   = min(offset + self._mtu, len(data))
+            chunk = bytes(view[offset:end])
+            await self._client.write_gatt_char(_NUS_RX, chunk, response=False)
+            window_sent += len(chunk)
+            offset = end
+            # Wait for device credit before sending the next window.
+            # Skip the wait on the last bytes — no more data to gate.
+            if window_sent >= _WINDOW and offset < len(data):
+                await asyncio.wait_for(self._ack_sem.acquire(), timeout=5.0)
+                window_sent = 0
 
     def _on_notify(self, _handle, data: bytearray):
         """Called by bleak in the event loop thread when the device sends data."""
+        if len(data) == 1 and data[0] == 0x06:
+            # Flow-control credit from device (see _WINDOW / _ACK on device side)
+            if self._ack_sem is not None:
+                self._ack_sem.release()
+            return
         with self._rx_lock:
             self._rx_buf.extend(data)
         self._rx_event.set()

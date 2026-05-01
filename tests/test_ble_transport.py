@@ -207,6 +207,39 @@ class TestBLETransportUnit(unittest.TestCase):
         results.append(self.t.read_line())
         self.assertEqual(results[0], 'pong')
 
+    def test_ack_byte_not_pushed_to_rx_buf(self):
+        """Single-byte 0x06 ACK must be swallowed, not pushed to the data stream."""
+        self.t._on_notify(None, bytearray(b'hello\n'))
+        self.t._on_notify(None, bytearray(b'\x06'))   # flow-control credit
+        with self.t._rx_lock:
+            self.assertEqual(bytes(self.t._rx_buf), b'hello\n')
+
+    def test_ack_byte_releases_semaphore(self):
+        """Single-byte 0x06 ACK must release the flow-control semaphore."""
+        import asyncio
+        future = asyncio.run_coroutine_threadsafe(
+            self._make_ack_sem(), self.t._loop
+        )
+        future.result(timeout=2)
+        self.t._on_notify(None, bytearray(b'\x06'))
+        # Semaphore value must now be 1
+        future2 = asyncio.run_coroutine_threadsafe(
+            self._drain_ack_sem(), self.t._loop
+        )
+        self.assertTrue(future2.result(timeout=2))
+
+    async def _make_ack_sem(self):
+        import asyncio
+        self.t._ack_sem = asyncio.Semaphore(0)
+
+    async def _drain_ack_sem(self):
+        import asyncio
+        try:
+            await asyncio.wait_for(self.t._ack_sem.acquire(), timeout=0.1)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
     def test_no_bleak_raises_helpful_error(self):
         """BLETransport() raises RuntimeError with pip hint when bleak absent."""
         import importlib.util

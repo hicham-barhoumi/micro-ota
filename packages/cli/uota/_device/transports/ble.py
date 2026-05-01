@@ -26,6 +26,9 @@ _IRQ_DISCONNECT = 2
 _IRQ_WRITE      = 3
 _IRQ_MTU        = 21
 
+_ACK    = b'\x06'   # 1-byte flow-control credit sent to host
+_WINDOW = 512       # host sends this many bytes between credit waits
+
 
 # ── connection object ─────────────────────────────────────────────────────────
 
@@ -37,12 +40,13 @@ class _BLEConn:
     """
 
     def __init__(self, ble, conn_handle, tx_handle, initial_mtu=20):
-        self._ble  = ble
-        self._conn = conn_handle
-        self._tx   = tx_handle
-        self._mtu  = max(20, initial_mtu - 3)
-        self._buf  = bytearray()
-        self._closed = False
+        self._ble        = ble
+        self._conn       = conn_handle
+        self._tx         = tx_handle
+        self._mtu        = max(20, initial_mtu - 3)
+        self._buf        = bytearray()
+        self._closed     = False
+        self._rx_pending = 0   # bytes consumed since last credit
 
     def set_mtu(self, mtu):
         self._mtu = max(20, mtu - 3)
@@ -62,6 +66,10 @@ class _BLEConn:
             time.sleep_ms(5)
         chunk = bytes(self._buf[:n])
         self._buf[:n] = b''  # del self._buf[:n] is not supported in MicroPython
+        self._rx_pending += len(chunk)
+        while self._rx_pending >= _WINDOW:
+            self._ble.gatts_notify(self._conn, self._tx, _ACK)
+            self._rx_pending -= _WINDOW
         return chunk
 
     def sendall(self, data):
