@@ -188,6 +188,23 @@ def _walk_stage():
         yield from _walk(_STAGE)
 
 
+# ── authentication ────────────────────────────────────────────────────────────
+
+def _authenticate(conn, cfg):
+    """Read the first line from conn as the OTA password.
+    Returns True and sends 'ok' if accepted, False and sends 'denied' if not.
+    If otaPassword is not set in cfg, any value (including empty) is accepted.
+    """
+    pw = cfg.get('otaPassword', '')
+    received = _read_line(conn)
+    if not pw or received == pw.encode():
+        _send(conn, 'ok\n')
+        return True
+    _send(conn, 'denied\n')
+    print('[OTA] Auth failed — wrong password')
+    return False
+
+
 # ── OTA session ───────────────────────────────────────────────────────────────
 
 def _handle_ota(conn, cfg):
@@ -640,7 +657,7 @@ class OTAUpdater:
         """Return a list of all configured transports that can be instantiated."""
         cfg = self._config
         result = []
-        for name in cfg.get('transports', ['wifi_tcp']):
+        for name in cfg.get('transports', ['ble']):
             try:
                 if name == 'wifi_tcp':
                     from transports.wifi_tcp import WiFiTCPTransport
@@ -707,6 +724,8 @@ class OTAUpdater:
                             continue
                         raise
                     try:
+                        if not _authenticate(conn, self._config):
+                            continue
                         while True:
                             try:
                                 _handle(conn, self._config)

@@ -6,10 +6,10 @@ Commands:
   info        [--port PORT] [--baud BAUD]
   init       [--dir DIR] [--force]
   bootstrap  [--port PORT] [--baud BAUD] [--mpy]
-  fast        [--host HOST] [--port PORT] [--transport T] [--version VER]
-  full        [--host HOST] [--port PORT] [--transport T] [--version VER] [--wipe]
-  terminal    [--host HOST] [--port PORT] [--transport T]
-  version     [--host HOST] [--port PORT] [--transport T]
+  fast        [--host HOST] [--port PORT] [--transport T] [--ble-name N] [--password P] [--version VER]
+  full        [--host HOST] [--port PORT] [--transport T] [--ble-name N] [--password P] [--version VER] [--wipe]
+  terminal    [--host HOST] [--port PORT] [--transport T] [--ble-name N] [--password P]
+  version     [--host HOST] [--port PORT] [--transport T] [--ble-name N] [--password P]
   flash <firmware.bin> [--port PORT] [--baud BAUD] [--chip CHIP] [--erase]
   serve       [--host HOST] [--port PORT] [--version VER]
   bundle      [--out DIR] [--zip] [--version VER]
@@ -136,8 +136,9 @@ def load_config(path='config/ota.json'):
 
 # -- transport factory ---------------------------------------------------------
 
-def get_transport(cfg, host_override=None, port_override=None, transport_override=None):
-    names = [transport_override] if transport_override else cfg.get('transports', ['wifi_tcp'])
+def get_transport(cfg, host_override=None, port_override=None, transport_override=None,
+                  ble_name_override=None):
+    names = [transport_override] if transport_override else cfg.get('transports', ['ble'])
 
     for name in names:
         if name == 'wifi_tcp':
@@ -152,10 +153,19 @@ def get_transport(cfg, host_override=None, port_override=None, transport_overrid
             return SerialOTATransport(port, baud)
         if name == 'ble':
             from .transports.ble import BLETransport
-            ble_name = host_override or cfg.get('bleName', 'micro-ota')
+            ble_name = ble_name_override or host_override or cfg.get('bleName', 'micro-ota')
             return BLETransport(ble_name)
 
     raise RuntimeError('No supported transport in config')
+
+
+def _do_auth(transport, password):
+    """Send OTA password (empty string if none) and check device response."""
+    transport.write_line(password or '')
+    resp = transport.read_line().strip()
+    if resp == 'denied':
+        print('ERROR: OTA authentication failed — wrong password.', file=sys.stderr)
+        sys.exit(1)
 
 
 def _auto_serial():
@@ -176,9 +186,10 @@ def _normalise_serial_port(port):
 
 # -- OTA push ------------------------------------------------------------------
 
-def send_ota(transport, files, manifest, wipe=False):
+def send_ota(transport, files, manifest, wipe=False, password=''):
     start = time.time()
     with transport:
+        _do_auth(transport, password)
         if wipe:
             # transport is already connected via __enter__; send wipe, then
             # close and reopen so the inline server is re-injected for the OTA
@@ -291,7 +302,7 @@ def _build_ota_stream(manifest, files, key=''):
     return b'OTAS' + bytes(body) + trailer
 
 
-def send_stream_ota(transport, files, manifest, key='', wipe=False):
+def send_stream_ota(transport, files, manifest, key='', wipe=False, password=''):
     """
     Push files using the streaming binary protocol (stream_ota command).
 
@@ -307,6 +318,7 @@ def send_stream_ota(transport, files, manifest, key='', wipe=False):
         nfiles, 's' if nfiles != 1 else '', total / 1024))
 
     with transport:
+        _do_auth(transport, password)
         if wipe:
             transport.write_line('wipe')
             resp = transport.read_line()
@@ -324,7 +336,7 @@ def send_stream_ota(transport, files, manifest, key='', wipe=False):
             # Device's ota.py predates stream_ota -- fall back to old protocol.
             print('(device does not support stream_ota, falling back to legacy OTA)')
             transport.close()
-            send_ota(transport, files, manifest, wipe=False)
+            send_ota(transport, files, manifest, wipe=False, password=password)
             return
         if resp.strip() != 'ready':
             print('Device not ready for stream_ota:', resp)
@@ -735,9 +747,12 @@ def _ota_push(cfg, args, patterns, excludes, wipe=False):
                 shutil.rmtree(tmp_dir, ignore_errors=True)
                 tmp_dir = None
 
-    transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None))
+    password = getattr(args, 'password', None) or cfg.get('otaPassword', '')
+    ble_name = getattr(args, 'ble_name', None)
+    transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None),
+                              ble_name_override=ble_name)
     try:
-        send_stream_ota(transport, files, manifest, key=key, wipe=wipe)
+        send_stream_ota(transport, files, manifest, key=key, wipe=wipe, password=password)
     finally:
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -757,7 +772,10 @@ def cmd_full(args, cfg):
 
 
 def cmd_terminal(args, cfg):
-    transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None))
+    password = getattr(args, 'password', None) or cfg.get('otaPassword', '')
+    ble_name = getattr(args, 'ble_name', None)
+    transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None),
+                              ble_name_override=ble_name)
     print("Terminal mode. Type 'exit' to quit.")
     print("Commands: ping, version, ls [path], get <path>, rm <path>, reset, wipe")
     try:
@@ -766,6 +784,7 @@ def cmd_terminal(args, cfg):
         print('Connection error:', e)
         return
     try:
+        _do_auth(transport, password)
         while True:
             try:
                 line = input('$ ').strip()
@@ -802,8 +821,12 @@ def cmd_terminal(args, cfg):
 
 
 def cmd_version(args, cfg):
-    transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None))
+    password = getattr(args, 'password', None) or cfg.get('otaPassword', '')
+    ble_name = getattr(args, 'ble_name', None)
+    transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None),
+                              ble_name_override=ble_name)
     with transport:
+        _do_auth(transport, password)
         transport.write_line('version')
         print(transport.read_line())
 
@@ -882,6 +905,10 @@ def main():
     fa.add_argument('--port',      type=int)
     fa.add_argument('--version')
     fa.add_argument('--transport', choices=['wifi_tcp', 'serial', 'ble'])
+    fa.add_argument('--ble-name',  dest='ble_name', metavar='NAME',
+                    help='BLE advertisement name (overrides bleName in ota.json)')
+    fa.add_argument('--password',  metavar='PW',
+                    help='OTA session password (overrides otaPassword in ota.json)')
 
     # full
     fu = sub.add_parser('full', help='Push all managed files to the device')
@@ -890,18 +917,30 @@ def main():
     fu.add_argument('--version')
     fu.add_argument('--wipe', action='store_true')
     fu.add_argument('--transport', choices=['wifi_tcp', 'serial', 'ble'])
+    fu.add_argument('--ble-name',  dest='ble_name', metavar='NAME',
+                    help='BLE advertisement name (overrides bleName in ota.json)')
+    fu.add_argument('--password',  metavar='PW',
+                    help='OTA session password (overrides otaPassword in ota.json)')
 
     # terminal
     te = sub.add_parser('terminal', help='Interactive device terminal')
     te.add_argument('--host')
     te.add_argument('--port', type=int)
     te.add_argument('--transport', choices=['wifi_tcp', 'serial', 'ble'])
+    te.add_argument('--ble-name',  dest='ble_name', metavar='NAME',
+                    help='BLE advertisement name (overrides bleName in ota.json)')
+    te.add_argument('--password',  metavar='PW',
+                    help='OTA session password (overrides otaPassword in ota.json)')
 
     # version
     ve = sub.add_parser('version', help='Read version from device')
     ve.add_argument('--host')
     ve.add_argument('--port', type=int)
     ve.add_argument('--transport', choices=['wifi_tcp', 'serial', 'ble'])
+    ve.add_argument('--ble-name',  dest='ble_name', metavar='NAME',
+                    help='BLE advertisement name (overrides bleName in ota.json)')
+    ve.add_argument('--password',  metavar='PW',
+                    help='OTA session password (overrides otaPassword in ota.json)')
 
     # flash
     fl = sub.add_parser('flash', help='Flash MicroPython firmware via esptool')

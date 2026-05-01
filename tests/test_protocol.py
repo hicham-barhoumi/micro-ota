@@ -80,6 +80,10 @@ class MockDevice:
             self.error = e
 
     def _handle_session(self, conn):
+        # Auth handshake: consume password line and reply ok (no real check in tests)
+        self._readline(conn)
+        self._send(conn, 'ok\n')
+
         # Each command arrives on its own connection in real device,
         # but send_ota keeps one connection open for the full OTA session.
         # The device accepts start_ota then keeps the connection.
