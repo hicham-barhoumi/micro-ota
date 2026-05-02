@@ -645,8 +645,8 @@ class OTAUpdater:
                 _cfg = _json.load(_f)
         except Exception:
             _cfg = {}
-        _t = _cfg.get('transports', ['wifi_tcp'])
-        if any(x in _t for x in ('wifi_tcp', 'http_pull', 'serial')):
+        _t = _cfg.get('transports', ['ble'])
+        if any(x in _t for x in ('wifi_tcp', 'http_pull')):
             import network as _net
             _net.WLAN(_net.STA_IF).active(True)
         if 'ble' in _t:
@@ -699,61 +699,100 @@ class OTAUpdater:
             raise RuntimeError('No OTA transport available')
         return result
 
-    def _run_transport(self, transport):
-        """Serve one transport forever, restarting on errors."""
-        if getattr(transport, 'is_pull', False):
-            # Pull-mode transport: poll() on an interval instead of accept() loop
-            print('[OTA] Pull transport started, interval=%ds' % transport.interval)
+    def _make_remoteio(self):
+        port = self._config.get('remoteioPort', 0)
+        if not port:
+            return None
+        try:
+            from remoteio import RemoteIOServer
+            return RemoteIOServer(port)
+        except Exception as e:
+            print('[OTA] RemoteIO unavailable:', e)
+            return None
+
+    def _serve_conn(self, conn):
+        """Authenticate and dispatch commands on an accepted connection."""
+        try:
+            if not _authenticate(conn, self._config):
+                return
             while True:
                 try:
-                    transport.poll()
+                    _handle(conn, self._config)
+                except EOFError:
+                    break
                 except Exception as e:
-                    print('[OTA] Poll error:', e)
-                time.sleep(transport.interval)
-            return
-
-        # Push-mode transport: accept incoming connections
-        while True:
+                    print('[OTA] Handler error:', e)
+                    break
+        finally:
             try:
-                transport.start()
-                while True:
-                    try:
-                        conn = transport.accept()
-                    except OSError as e:
-                        if e.args[0] in (116, 11):
-                            continue
-                        raise
-                    try:
-                        if not _authenticate(conn, self._config):
-                            continue
-                        while True:
-                            try:
-                                _handle(conn, self._config)
-                            except EOFError:
-                                break
-                            except Exception as e:
-                                print('[OTA] Handler error:', e)
-                                break
-                    finally:
-                        try:
-                            conn.close()
-                        except Exception:
-                            pass
-            except Exception as e:
-                print('[OTA] Transport error:', e)
-                try:
-                    transport.stop()
-                except Exception:
-                    pass
-                time.sleep(3)
+                conn.close()
+            except Exception:
+                pass
 
     def run(self):
-        """Start all configured transports. Each runs in its own thread."""
+        """
+        Single-threaded event loop: polls all transports and RemoteIO for
+        incoming connections without spawning any threads.
+
+        One client is served to completion before the loop continues — this
+        is intentional for OTA (serialised updates) and acceptable for remoteio
+        (one console at a time).
+        """
         transports = self._make_transports()
-        # Spawn a thread for every transport except the last, which runs here.
-        for t in transports[:-1]:
-            _thread.start_new_thread(self._run_transport, (t,))
-        self._run_transport(transports[-1])
+        push = [t for t in transports if not getattr(t, 'is_pull', False)]
+        pull = [t for t in transports if getattr(t, 'is_pull', False)]
+
+        for t in transports:
+            t.start()
+
+        rio = self._make_remoteio()
+        if rio:
+            try:
+                rio.start()
+            except Exception as e:
+                print('[OTA] RemoteIO failed to start:', e)
+                rio = None
+
+        # Track next poll time for pull transports (ticks_ms)
+        pull_next = {id(t): time.ticks_ms() for t in pull}
+
+        print('[OTA] Event loop started')
+        while True:
+            # ── push transports ───────────────────────────────────────────────
+            for t in push:
+                try:
+                    conn = t.try_accept()
+                except Exception as e:
+                    print('[OTA] Transport error:', e)
+                    try: t.stop()
+                    except Exception: pass
+                    time.sleep_ms(3000)
+                    try: t.start()
+                    except Exception as e2: print('[OTA] Restart failed:', e2)
+                    conn = None
+                if conn is not None:
+                    self._serve_conn(conn)
+
+            # ── pull transports ───────────────────────────────────────────────
+            now = time.ticks_ms()
+            for t in pull:
+                if time.ticks_diff(now, pull_next[id(t)]) >= 0:
+                    try:
+                        t.poll()
+                    except Exception as e:
+                        print('[OTA] Poll error:', e)
+                    pull_next[id(t)] = time.ticks_add(now, t.interval * 1000)
+
+            # ── remoteio ──────────────────────────────────────────────────────
+            if rio is not None:
+                try:
+                    conn = rio.try_accept()
+                    if conn is not None:
+                        rio.serve(conn)
+                except Exception as e:
+                    print('[OTA] RemoteIO error:', e)
+
+            time.sleep_ms(50)
 
     def run_background(self):
         _thread.start_new_thread(self.run, ())

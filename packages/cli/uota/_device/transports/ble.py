@@ -131,9 +131,8 @@ class BLETransport:
 
     def stop(self):
         # Stop advertising only — do not deactivate BLE hardware.
-        # The hardware was activated in the main thread and must stay up so
-        # that _run_transport can restart this transport without cycling
-        # ble.active() from the OTA thread (which causes an HCI error).
+        # Hardware was activated in activate_hardware() and must stay up;
+        # cycling ble.active() mid-session causes an HCI error.
         try:
             if self._ble:
                 self._ble.gap_advertise(None)
@@ -147,6 +146,13 @@ class BLETransport:
             time.sleep_ms(50)
         conn = self._pending
         self._pending = None
+        return conn
+
+    def try_accept(self):
+        """Return a pending BLE connection immediately, or None."""
+        conn = self._pending
+        if conn is not None:
+            self._pending = None
         return conn
 
     # ── GATT setup ────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 import network
 import socket
 import time
+import uselect
 
 
 class WiFiTCPTransport:
@@ -32,6 +33,18 @@ class WiFiTCPTransport:
         print('[OTA] TCP server ready on port', self.port)
 
     def accept(self):
+        conn, addr = self._server.accept()
+        print('[OTA] Connection from', addr)
+        return conn
+
+    def try_accept(self):
+        """Return a connection immediately if one is waiting, else None."""
+        if self._server is None:
+            return None
+        poll = uselect.poll()
+        poll.register(self._server, uselect.POLLIN)
+        if not poll.poll(0):
+            return None
         conn, addr = self._server.accept()
         print('[OTA] Connection from', addr)
         return conn

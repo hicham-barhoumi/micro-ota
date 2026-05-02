@@ -57,6 +57,7 @@ class SerialTransport:
         self._tx      = tx
         self._rx      = rx
         self._uart    = None
+        self._buf     = bytearray()   # accumulates bytes across try_accept() calls
 
     def start(self):
         self._uart = machine.UART(
@@ -81,7 +82,22 @@ class SerialTransport:
             else:
                 time.sleep_ms(10)
 
+    def try_accept(self):
+        """Return a connection if MAGIC has been received, else None."""
+        if not self._uart or not self._uart.any():
+            return None
+        self._buf.extend(self._uart.read(self._uart.any()))
+        if self._buf.endswith(MAGIC):
+            self._buf = bytearray()
+            self._uart.write(b'UOTA_OK\n')
+            return _UARTConn(self._uart)
+        mlen = len(MAGIC)
+        if len(self._buf) > mlen * 4:
+            self._buf = self._buf[-mlen:]
+        return None
+
     def stop(self):
         if self._uart:
             self._uart.deinit()
             self._uart = None
+        self._buf = bytearray()

@@ -32,6 +32,7 @@ The server is started automatically when run() is called (e.g. from boot.py).
 import json
 import os
 import socket
+import uselect
 import _thread
 import time
 
@@ -209,3 +210,50 @@ def run(port=2019):
                 time.sleep(1)
     finally:
         srv.close()
+
+
+# ── non-blocking server for single-threaded use ───────────────────────────────
+
+class RemoteIOServer:
+    """
+    Non-blocking RemoteIO server for integration into a single-threaded poll loop.
+
+    Usage:
+        rio = RemoteIOServer(port)
+        rio.start()
+        # in poll loop:
+        conn = rio.try_accept()
+        if conn:
+            rio.serve(conn)   # blocks for duration of client session
+    """
+
+    def __init__(self, port=2019):
+        self._port = port
+        self._srv  = None
+
+    def start(self):
+        self._srv = socket.socket()
+        try:
+            self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._srv.bind(('', self._port))
+            self._srv.listen(1)
+        except Exception:
+            self._srv.close()
+            self._srv = None
+            raise
+        print('[RemoteIO] Listening on :%d' % self._port)
+
+    def try_accept(self):
+        if self._srv is None:
+            return None
+        poll = uselect.poll()
+        poll.register(self._srv, uselect.POLLIN)
+        if not poll.poll(0):
+            return None
+        conn, _ = self._srv.accept()
+        print('[RemoteIO] Client connected')
+        return conn
+
+    def serve(self, conn):
+        _serve(conn)
+        print('[RemoteIO] Client disconnected')
