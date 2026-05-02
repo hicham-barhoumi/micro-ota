@@ -230,6 +230,7 @@ class RemoteIOServer:
     def __init__(self, port=2019):
         self._port = port
         self._srv  = None
+        self._poll = None
 
     def start(self):
         self._srv = socket.socket()
@@ -237,18 +238,25 @@ class RemoteIOServer:
             self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self._srv.bind(('', self._port))
             self._srv.listen(1)
+            self._poll = uselect.poll()
+            self._poll.register(self._srv, uselect.POLLIN)
         except Exception:
             self._srv.close()
             self._srv = None
+            self._poll = None
             raise
         print('[RemoteIO] Listening on :%d' % self._port)
+
+    def stop(self):
+        if self._srv:
+            self._srv.close()
+            self._srv = None
+        self._poll = None
 
     def try_accept(self):
         if self._srv is None:
             return None
-        poll = uselect.poll()
-        poll.register(self._srv, uselect.POLLIN)
-        if not poll.poll(0):
+        if not self._poll.poll(0):
             return None
         conn, _ = self._srv.accept()
         print('[RemoteIO] Client connected')

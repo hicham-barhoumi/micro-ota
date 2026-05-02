@@ -11,6 +11,7 @@ class WiFiTCPTransport:
         self.hostname = hostname
         self.port = port
         self._server = None
+        self._poll = None
 
     def start(self):
         self._connect_wifi()
@@ -26,9 +27,12 @@ class WiFiTCPTransport:
             self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self._server.bind(('0.0.0.0', self.port))
             self._server.listen(1)
+            self._poll = uselect.poll()
+            self._poll.register(self._server, uselect.POLLIN)
         except Exception:
             self._server.close()
             self._server = None
+            self._poll = None
             raise
         print('[OTA] TCP server ready on port', self.port)
 
@@ -41,9 +45,7 @@ class WiFiTCPTransport:
         """Return a connection immediately if one is waiting, else None."""
         if self._server is None:
             return None
-        poll = uselect.poll()
-        poll.register(self._server, uselect.POLLIN)
-        if not poll.poll(0):
+        if not self._poll.poll(0):
             return None
         conn, addr = self._server.accept()
         print('[OTA] Connection from', addr)
@@ -53,6 +55,7 @@ class WiFiTCPTransport:
         if self._server:
             self._server.close()
             self._server = None
+        self._poll = None
 
     def _connect_wifi(self):
         sta = network.WLAN(network.STA_IF)

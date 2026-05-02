@@ -749,6 +749,9 @@ class OTAUpdater:
         (one console at a time).
         """
         transports = self._make_transports()
+        # Connect WiFi (has 'ssid' attr) before BLE starts advertising to avoid
+        # coexistence interference during 802.11 association on the shared radio.
+        transports.sort(key=lambda t: 0 if hasattr(t, 'ssid') else 1)
         started = []
         for t in transports:
             try:
@@ -768,43 +771,73 @@ class OTAUpdater:
                 print('[OTA] RemoteIO failed to start:', e)
                 rio = None
 
+        # Periodic WiFi health-check: reconnect if the link drops.
+        _wifi_check_next = time.ticks_add(time.ticks_ms(), 30_000)
+
         print('[OTA] Event loop started')
-        while True:
-            # ── push transports ───────────────────────────────────────────────
-            for t in push:
-                try:
-                    conn = t.try_accept()
-                except Exception as e:
-                    print('[OTA] Transport error:', e)
-                    try: t.stop()
-                    except Exception: pass
-                    time.sleep_ms(3000)
-                    try: t.start()
-                    except Exception as e2: print('[OTA] Restart failed:', e2)
-                    conn = None
-                if conn is not None:
-                    self._serve_conn(conn)
-
-            # ── pull transports ───────────────────────────────────────────────
-            now = time.ticks_ms()
-            for t in pull:
-                if time.ticks_diff(now, pull_next[id(t)]) >= 0:
+        try:
+            while True:
+                # ── push transports ───────────────────────────────────────────
+                for t in push:
                     try:
-                        t.poll()
+                        conn = t.try_accept()
                     except Exception as e:
-                        print('[OTA] Poll error:', e)
-                    pull_next[id(t)] = time.ticks_add(now, t.interval * 1000)
-
-            # ── remoteio ──────────────────────────────────────────────────────
-            if rio is not None:
-                try:
-                    conn = rio.try_accept()
+                        print('[OTA] Transport error:', e)
+                        try: t.stop()
+                        except Exception: pass
+                        time.sleep_ms(3000)
+                        try: t.start()
+                        except Exception as e2: print('[OTA] Restart failed:', e2)
+                        conn = None
                     if conn is not None:
-                        rio.serve(conn)
-                except Exception as e:
-                    print('[OTA] RemoteIO error:', e)
+                        self._serve_conn(conn)
 
-            time.sleep_ms(50)
+                # ── pull transports ───────────────────────────────────────────
+                now = time.ticks_ms()
+                for t in pull:
+                    if time.ticks_diff(now, pull_next[id(t)]) >= 0:
+                        try:
+                            t.poll()
+                        except Exception as e:
+                            print('[OTA] Poll error:', e)
+                        pull_next[id(t)] = time.ticks_add(now, t.interval * 1000)
+
+                # ── remoteio ──────────────────────────────────────────────────
+                if rio is not None:
+                    try:
+                        conn = rio.try_accept()
+                        if conn is not None:
+                            rio.serve(conn)
+                    except Exception as e:
+                        print('[OTA] RemoteIO error:', e)
+
+                # ── WiFi health-check ─────────────────────────────────────────
+                now = time.ticks_ms()
+                if time.ticks_diff(now, _wifi_check_next) >= 0:
+                    _wifi_check_next = time.ticks_add(now, 30_000)
+                    import network as _net
+                    _sta = _net.WLAN(_net.STA_IF)
+                    if _sta.active() and not _sta.isconnected():
+                        for t in push:
+                            if hasattr(t, 'ssid'):
+                                print('[OTA] WiFi dropped — reconnecting')
+                                try:
+                                    t.stop()
+                                    t.start()
+                                except Exception as e:
+                                    print('[OTA] WiFi reconnect failed:', e)
+                                break
+
+                time.sleep_ms(50)
+        finally:
+            # Close all transport sockets so the lwIP pool is freed even on
+            # KeyboardInterrupt — prevents EADDRINUSE / ENOBUFS on re-entry.
+            for t in started:
+                try: t.stop()
+                except Exception: pass
+            if rio is not None:
+                try: rio.stop()
+                except Exception: pass
 
     def run_background(self):
         _thread.start_new_thread(self.run, ())
