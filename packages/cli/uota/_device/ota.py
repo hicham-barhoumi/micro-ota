@@ -10,7 +10,7 @@ Protocol (all text lines are \n terminated):
   get <path>                   → <size>\n<binary>
   rm <path>                    → ok / error
   reset                        → ok  (then resets)
-  wipe                         → ok  (deletes all files from the filesystem)
+  wipe                         → ok  (deletes user files; preserves /lib, /config, /boot.py)
   start_ota                    → ready  (enters OTA session)
     manifest <size>\n<json>    → ok
     file <name>;<size>;<sha256>\n<binary>  → ok / sha256_mismatch
@@ -191,13 +191,14 @@ def _walk_stage():
 # ── authentication ────────────────────────────────────────────────────────────
 
 def _authenticate(conn, cfg):
-    """Read the first line from conn as the OTA password.
-    Returns True and sends 'ok' if accepted, False and sends 'denied' if not.
-    If otaPassword is not set in cfg, any value (including empty) is accepted.
+    """Password handshake — only active when otaPassword is set in config.
+    Returns True if auth passes or is not required, False if denied.
     """
     pw = cfg.get('otaPassword', '')
+    if not pw:
+        return True   # no password configured — skip handshake entirely
     received = _read_line(conn)
-    if not pw or received == pw.encode():
+    if received == pw.encode():
         _send(conn, 'ok\n')
         return True
     _send(conn, 'denied\n')
@@ -301,6 +302,8 @@ def _commit(new_manifest, staged):
     new_files = set(new_manifest.get('files', {}).keys()) if new_manifest else set()
     for rel in old_files - new_files:
         path = '/' + rel.lstrip('/')
+        if path.startswith('/lib/uota/'):
+            continue   # never auto-delete OTA library files
         try:
             os.remove(path)
             print('[OTA] Removed old file:', path)
@@ -507,8 +510,11 @@ def _handle(conn, cfg):
         machine.reset()
 
     elif cmd == b'wipe':
+        _OTA_KEEP = {'/lib', '/config', '/boot.py', '/boot_guard.py'}
         for item in os.listdir('/'):
-            _remove_tree('/' + item)
+            path = '/' + item
+            if path not in _OTA_KEEP:
+                _remove_tree(path)
         _send(conn, 'ok\n')
 
     else:
@@ -572,6 +578,8 @@ def serve_serial():
             if _poll.poll(0):          # byte ready — fast path, no ACK
                 b = _in.read(1)
                 if b:
+                    if b[0] == 3:      # Ctrl+C — let host reclaim raw REPL
+                        raise KeyboardInterrupt
                     return b[0]
             # Buffer empty — tell host to send the next window, then wait.
             _out.write(_ACK)
@@ -580,6 +588,8 @@ def serve_serial():
             if not _poll.poll(tms): raise OSError('recv timeout1')
             b = _in.read(1)
             if not b: raise OSError('recv timeout2')
+            if b[0] == 3:              # Ctrl+C after wait
+                raise KeyboardInterrupt
             return b[0]
 
         def recv(self, n):

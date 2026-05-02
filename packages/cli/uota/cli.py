@@ -160,8 +160,10 @@ def get_transport(cfg, host_override=None, port_override=None, transport_overrid
 
 
 def _do_auth(transport, password):
-    """Send OTA password (empty string if none) and check device response."""
-    transport.write_line(password or '')
+    """Send OTA password and check response — no-op when password is empty."""
+    if not password:
+        return   # no password configured — skip handshake entirely
+    transport.write_line(password)
     resp = transport.read_line().strip()
     if resp == 'denied':
         print('ERROR: OTA authentication failed — wrong password.', file=sys.stderr)

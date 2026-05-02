@@ -9,7 +9,7 @@
     "bleName":      "micro-ota",
     "otaPassword":  "",
     "serialPort":   "",
-    "transports":   ["ble", "wifi_tcp"],
+    "transports":   ["wifi_tcp"],
     "manifestUrl":  "",
     "pullInterval": 60,
     "fastOtaFiles": ["app/**", "main.py", "config/**"],

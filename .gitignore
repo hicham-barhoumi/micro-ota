@@ -22,3 +22,5 @@ packages/cli/*.egg-info/
 packages/cli/dist/
 packages/cli/build/
 packages/cli/README.md
+examples/serial/.uota_cache.json
+.uota_cache.json

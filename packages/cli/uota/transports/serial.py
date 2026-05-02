@@ -325,12 +325,15 @@ class SerialOTATransport:
     def close(self):
         if self._ser and self._ser.is_open:
             try:
-                # Ctrl-C stops the inline server loop, leaving device in raw REPL.
-                # machine.reset() (hard reset) is used instead of soft reset (Ctrl-D)
-                # so the LWIP socket pool is fully cleared — soft reset leaves dangling
-                # LWIP sockets from background OTA/RemoteIO threads, which exhaust the
-                # pool (LWIP_MAX_SOCKETS=10) after a few serial OTA sessions.
+                # Ctrl+C stops serve_serial() — it now raises KeyboardInterrupt,
+                # which leaves the device in normal REPL mode (not raw REPL).
+                # Re-enter raw REPL with Ctrl+A, then execute machine.reset().
+                # Hard reset clears LWIP sockets that a soft reset (Ctrl+D) leaves
+                # dangling, which would exhaust LWIP_MAX_SOCKETS after a few sessions.
                 self._ser.write(b'\x03')
+                self._ser.flush()
+                time.sleep(0.3)
+                self._ser.write(b'\x01')    # Ctrl+A: enter raw REPL
                 self._ser.flush()
                 time.sleep(0.2)
                 self._ser.write(b'import machine;machine.reset()\x04')

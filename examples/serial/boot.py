@@ -10,24 +10,9 @@ boot_guard.boot()
 
 OTAUpdater.activate_hardware()
 
-import _thread
-
-def _ota():
-    try:
-        upd = OTAUpdater()
-        import boot_guard as _bg; _bg.mark_clean()
-        upd.run()
-    except Exception as _e:
-        print('[OTA] Failed to start:', _e)
-
-def _remoteio():
-    try:
-        import remoteio
-        remoteio.run()
-    except Exception as _e:
-        print('[RemoteIO] Failed to start:', _e)
-
-_thread.stack_size(8192)
-_thread.start_new_thread(_ota, ())
-_thread.stack_size(4096)
-_thread.start_new_thread(_remoteio, ())
+try:
+    upd = OTAUpdater()
+    import boot_guard as _bg; _bg.mark_clean()
+    upd.run()
+except Exception as _e:
+    print('[OTA] Fatal error:', _e)

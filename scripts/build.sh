@@ -32,6 +32,14 @@ echo "micro-ota build"
 echo "Output: $DIST"
 echo "────────────────────────────────────────"
 
+# ── sync device lib to examples ──────────────────────────────────────────────
+
+DEVICE_SRC="$ROOT/packages/cli/uota/_device"
+EXAMPLES_LIB="$ROOT/examples/serial/lib/uota"
+if [ -d "$EXAMPLES_LIB" ]; then
+    rsync -a --include='*.py' --exclude='__pycache__/' "$DEVICE_SRC/" "$EXAMPLES_LIB/"
+fi
+
 # ── pip package ───────────────────────────────────────────────────────────────
 
 echo ""
