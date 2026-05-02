@@ -819,13 +819,16 @@ class OTAUpdater:
                     _sta = _net.WLAN(_net.STA_IF)
                     if _sta.active() and not _sta.isconnected():
                         for t in push:
-                            if hasattr(t, 'ssid'):
-                                print('[OTA] WiFi dropped — reconnecting')
+                            if hasattr(t, 'ssid') and t.ssid:
+                                # Non-blocking: kick sta.connect() and let the WiFi
+                                # driver reconnect in the background.  Do NOT call
+                                # t.stop()/t.start() here — that blocks for up to
+                                # 20 s in _connect_wifi() and freezes BLE.
+                                print('[OTA] WiFi dropped — background reconnect')
                                 try:
-                                    t.stop()
-                                    t.start()
-                                except Exception as e:
-                                    print('[OTA] WiFi reconnect failed:', e)
+                                    _sta.connect(t.ssid, t.password)
+                                except Exception:
+                                    pass
                                 break
 
                 time.sleep_ms(50)
