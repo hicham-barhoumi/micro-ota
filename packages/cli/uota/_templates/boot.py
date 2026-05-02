@@ -10,24 +10,37 @@ boot_guard.boot()
 
 OTAUpdater.activate_hardware()
 
-import _thread
+# Only spawn the RemoteIO thread if remoteioPort is configured and non-zero.
+# With BLE+WiFi coexistence active the free heap is tight; skipping this thread
+# when unused saves the stack + TCB overhead (~6-8 KB on ESP32).
+try:
+    import json as _j
+    with open('/config/ota.json') as _f:
+        _rio_port = _j.load(_f).get('remoteioPort', 0)
+except Exception:
+    _rio_port = 0
 
-def _ota():
+if _rio_port:
+    import _thread
+
+    def _remoteio():
+        try:
+            import remoteio
+            remoteio.run(_rio_port)
+        except Exception as _e:
+            print('[RemoteIO] Failed to start:', _e)
+
     try:
-        upd = OTAUpdater()
-        import boot_guard as _bg; _bg.mark_clean()
-        upd.run()
-    except Exception as _e:
-        print('[OTA] Failed to start:', _e)
+        _thread.stack_size(4096)
+        _thread.start_new_thread(_remoteio, ())
+    except OSError:
+        print('[boot] Not enough heap for RemoteIO thread — skipped')
 
-def _remoteio():
-    try:
-        import remoteio
-        remoteio.run()
-    except Exception as _e:
-        print('[RemoteIO] Failed to start:', _e)
-
-_thread.stack_size(8192)
-_thread.start_new_thread(_ota, ())
-_thread.stack_size(4096)
-_thread.start_new_thread(_remoteio, ())
+# Run OTA in the main thread (no extra thread, no extra stack allocation).
+# machine.reset() inside the OTA handler terminates this naturally.
+try:
+    upd = OTAUpdater()
+    import boot_guard as _bg; _bg.mark_clean()
+    upd.run()
+except Exception as _e:
+    print('[OTA] Fatal error:', _e)
