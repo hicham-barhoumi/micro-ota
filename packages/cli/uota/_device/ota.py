@@ -749,11 +749,16 @@ class OTAUpdater:
         (one console at a time).
         """
         transports = self._make_transports()
-        push = [t for t in transports if not getattr(t, 'is_pull', False)]
-        pull = [t for t in transports if getattr(t, 'is_pull', False)]
-
+        started = []
         for t in transports:
-            t.start()
+            try:
+                t.start()
+                started.append(t)
+            except Exception as e:
+                print('[OTA] Transport failed to start:', e)
+        push = [t for t in started if not getattr(t, 'is_pull', False)]
+        pull = [t for t in started if getattr(t, 'is_pull', False)]
+        pull_next = {id(t): time.ticks_ms() for t in pull}
 
         rio = self._make_remoteio()
         if rio:
@@ -762,9 +767,6 @@ class OTAUpdater:
             except Exception as e:
                 print('[OTA] RemoteIO failed to start:', e)
                 rio = None
-
-        # Track next poll time for pull transports (ticks_ms)
-        pull_next = {id(t): time.ticks_ms() for t in pull}
 
         print('[OTA] Event loop started')
         while True:
