@@ -302,8 +302,8 @@ def _commit(new_manifest, staged):
     new_files = set(new_manifest.get('files', {}).keys()) if new_manifest else set()
     for rel in old_files - new_files:
         path = '/' + rel.lstrip('/')
-        if path.startswith('/lib/uota/'):
-            continue   # never auto-delete OTA library files
+        if path.startswith('/lib/uota/') or path == '/boot.py':
+            continue   # never auto-delete OTA bootstrap files
         try:
             os.remove(path)
             print('[OTA] Removed old file:', path)
