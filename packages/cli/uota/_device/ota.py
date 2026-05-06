@@ -643,14 +643,10 @@ class OTAUpdater:
 
     @staticmethod
     def activate_hardware():
-        """Activate radios that OTA needs. Must be called from the main thread.
-        Only activates what is configured — avoid activating WiFi on BLE-only
-        boards: BLE+WiFi coexist init consumes enough heap to prevent thread
-        creation, and the BLE stack init itself aborts when WiFi is already up.
-
-        When both WiFi and BLE are configured the run() loop manages radio
-        time-slicing (WiFi window → BLE window), so BLE is NOT pre-activated
-        here — it would immediately disrupt the WiFi radio.
+        """Pre-activate the WiFi STA interface so the driver is ready before
+        run() calls sta.connect().  BLE is NOT pre-activated here — the BLE
+        transport activates it in start(), after the RAM availability check in
+        run() has decided whether BLE will run at all.
         """
         try:
             import json as _json
@@ -659,15 +655,9 @@ class OTAUpdater:
         except Exception:
             _cfg = {}
         _t = _cfg.get('transports', ['ble'])
-        _has_wifi = any(x in _t for x in ('wifi_tcp', 'http_pull'))
-        _has_ble  = 'ble' in _t
-        if _has_wifi:
+        if any(x in _t for x in ('wifi_tcp', 'http_pull')):
             import network as _net
             _net.WLAN(_net.STA_IF).active(True)
-        if _has_ble and not _has_wifi:
-            # BLE-only config: pre-activate here (no WiFi coexistence concern).
-            import ubluetooth as _ub
-            _ub.BLE().active(True)
 
     def _make_transports(self):
         """Return a list of all configured transports that can be instantiated."""
@@ -750,28 +740,29 @@ class OTAUpdater:
         Single-threaded event loop: polls all transports and RemoteIO for
         incoming connections without spawning any threads.
 
-        One client is served to completion before the loop continues — this
-        is intentional for OTA (serialised updates) and acceptable for remoteio
-        (one console at a time).
+        On boards without PSRAM (Python heap ≤ 200 KB) only the first
+        configured transport is started — WiFi and BLE cannot both be active
+        simultaneously due to shared system-heap constraints on standard ESP32.
+        A warning is printed so the user knows which transport was skipped.
         """
         transports = self._make_transports()
-        # Connect WiFi (has 'ssid' attr) before BLE starts advertising to avoid
-        # coexistence interference during 802.11 association on the shared radio.
+        # WiFi transports first so 802.11 association happens before any BLE
+        # advertising begins (BLE active() blocks WiFi on shared-radio ESP32).
         transports.sort(key=lambda t: 0 if hasattr(t, 'ssid') else 1)
 
-        # Detect mixed WiFi+BLE config: the ESP32 shares one 2.4 GHz radio and
-        # ble.active(True) alone (even without advertising) breaks WiFi ARP.
-        # Solution: alternate between a WiFi window and a BLE window so only
-        # one radio stack is active at a time.
-        _coex_ts  = [t for t in transports if hasattr(t, 'radio_pause')]
-        _has_coex = bool(_coex_ts) and any(hasattr(t, 'ssid') for t in transports)
-        _WIFI_WIN = 60_000   # ms — WiFi window duration
-        _BLE_WIN  = 30_000   # ms — BLE window duration
+        # RAM check: if Python heap ≤ 200 KB the board has no PSRAM and cannot
+        # run WiFi + BLE simultaneously.  Start only the first transport.
+        import gc as _gc
+        _gc.collect()
+        _psram = _gc.mem_free() + _gc.mem_alloc() > 200_000
+        if not _psram and len(transports) > 1:
+            _skip = [type(t).__name__ for t in transports[1:]]
+            print('[OTA] Limited RAM — skipping:', ', '.join(_skip))
+            print('[OTA] Add PSRAM (ESP32-WROVER) to run all transports simultaneously.')
+            transports = transports[:1]
 
         started = []
         for t in transports:
-            if _has_coex and t in _coex_ts:
-                continue   # defer BLE start; run() activates it in the BLE window
             try:
                 t.start()
                 started.append(t)
@@ -781,60 +772,30 @@ class OTAUpdater:
         pull = [t for t in started if getattr(t, 'is_pull', False)]
         pull_next = {id(t): time.ticks_ms() for t in pull}
 
-        # Coexistence state (only used when _has_coex is True)
-        _in_ble_win   = False
-        _win_switch   = time.ticks_add(time.ticks_ms(), _WIFI_WIN)
-        if _has_coex:
-            print('[OTA] Coexistence mode: WiFi window %ds / BLE window %ds' % (
-                _WIFI_WIN // 1000, _BLE_WIN // 1000))
+        # RemoteIO: TCP when WiFi is running; BLE NUS when BLE-only.
+        _ble_t   = next((t for t in started if hasattr(t, 'try_accept_remoteio')), None)
+        _has_tcp = any(hasattr(t, 'ssid') for t in started)
 
-        rio = self._make_remoteio()
-        if rio:
-            try:
-                rio.start()
-            except Exception as e:
-                print('[OTA] RemoteIO failed to start:', e)
-                rio = None
+        rio = None
+        if _has_tcp:
+            rio = self._make_remoteio()
+            if rio:
+                try:
+                    rio.start()
+                except Exception as e:
+                    print('[OTA] RemoteIO failed to start:', e)
+                    rio = None
+        elif _ble_t:
+            print('[OTA] RemoteIO available via BLE NUS (6E400001…)')
 
-        # Periodic WiFi health-check: reconnect if the link drops.
+        # Periodic WiFi health-check.
         _wifi_check_next = time.ticks_add(time.ticks_ms(), 30_000)
 
         print('[OTA] Event loop started')
         try:
             while True:
-                # ── coexistence window switching ──────────────────────────────
-                if _has_coex:
-                    _now = time.ticks_ms()
-                    if time.ticks_diff(_now, _win_switch) >= 0:
-                        if _in_ble_win:
-                            # End BLE window → back to WiFi
-                            for _t in _coex_ts:
-                                try: _t.radio_pause()
-                                except Exception: pass
-                            _in_ble_win = False
-                            _win_switch = time.ticks_add(_now, _WIFI_WIN)
-                            print('[OTA] WiFi window (%ds)' % (_WIFI_WIN // 1000))
-                        else:
-                            # End WiFi window → switch to BLE
-                            for _t in _coex_ts:
-                                try:
-                                    _t.radio_resume()
-                                    if _t not in push:
-                                        push.append(_t)
-                                except Exception as _e:
-                                    print('[OTA] BLE window start:', _e)
-                            _in_ble_win = True
-                            _win_switch = time.ticks_add(_now, _BLE_WIN)
-                            print('[OTA] BLE window (%ds)' % (_BLE_WIN // 1000))
-
-                # Only poll transports appropriate for the current radio window.
-                _active_push = push if not _has_coex else (
-                    _coex_ts if _in_ble_win
-                    else [t for t in push if t not in _coex_ts]
-                )
-
                 # ── push transports ───────────────────────────────────────────
-                for t in _active_push:
+                for t in push:
                     try:
                         conn = t.try_accept()
                     except Exception as e:
@@ -846,12 +807,6 @@ class OTAUpdater:
                         except Exception as e2: print('[OTA] Restart failed:', e2)
                         conn = None
                     if conn is not None:
-                        # Extend the current window on activity.
-                        if _has_coex:
-                            _win_switch = time.ticks_add(
-                                time.ticks_ms(),
-                                _BLE_WIN if _in_ble_win else _WIFI_WIN
-                            )
                         self._serve_conn(conn)
 
                 # ── pull transports ───────────────────────────────────────────
@@ -864,7 +819,7 @@ class OTAUpdater:
                             print('[OTA] Poll error:', e)
                         pull_next[id(t)] = time.ticks_add(now, t.interval * 1000)
 
-                # ── remoteio ──────────────────────────────────────────────────
+                # ── TCP RemoteIO ──────────────────────────────────────────────
                 if rio is not None:
                     try:
                         conn = rio.try_accept()
@@ -872,6 +827,16 @@ class OTAUpdater:
                             rio.serve(conn)
                     except Exception as e:
                         print('[OTA] RemoteIO error:', e)
+
+                # ── BLE NUS RemoteIO ──────────────────────────────────────────
+                if _ble_t is not None:
+                    try:
+                        conn = _ble_t.try_accept_remoteio()
+                        if conn is not None:
+                            from remoteio import _serve as _rio_serve
+                            _rio_serve(conn)
+                    except Exception as e:
+                        print('[OTA] BLE RemoteIO error:', e)
 
                 # ── WiFi health-check ─────────────────────────────────────────
                 now = time.ticks_ms()
@@ -882,10 +847,6 @@ class OTAUpdater:
                     if _sta.active() and not _sta.isconnected():
                         for t in push:
                             if hasattr(t, 'ssid') and t.ssid:
-                                # Non-blocking: kick sta.connect() and let the WiFi
-                                # driver reconnect in the background.  Do NOT call
-                                # t.stop()/t.start() here — that blocks for up to
-                                # 20 s in _connect_wifi() and freezes BLE.
                                 print('[OTA] WiFi dropped — background reconnect')
                                 try:
                                     _sta.connect(t.ssid, t.password)
@@ -895,13 +856,8 @@ class OTAUpdater:
 
                 time.sleep_ms(50)
         finally:
-            # Close all transport sockets so the lwIP pool is freed even on
-            # KeyboardInterrupt — prevents EADDRINUSE / ENOBUFS on re-entry.
             for t in started:
                 try: t.stop()
-                except Exception: pass
-            for t in _coex_ts:
-                try: t.radio_pause()
                 except Exception: pass
             if rio is not None:
                 try: rio.stop()

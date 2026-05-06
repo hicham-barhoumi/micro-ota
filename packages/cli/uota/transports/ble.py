@@ -1,13 +1,16 @@
 """
-BLE transport for micro-ota host — Nordic UART Service (NUS) client.
+BLE transport for micro-ota host — micro-ota OTA service client.
 
 Uses the `bleak` library (async BLE) wrapped in a dedicated background
 asyncio event loop so the rest of the host code stays synchronous.
 
-NUS UUIDs:
-  Service  6E400001-B5A3-F393-E0A9-E50E24DCCA9E
-  RX char  6E400002-B5A3-F393-E0A9-E50E24DCCA9E  (host→device, WRITE NO RSP)
-  TX char  6E400003-B5A3-F393-E0A9-E50E24DCCA9E  (device→host, NOTIFY)
+micro-ota OTA service UUIDs ("uota" prefix, NOT NUS):
+  Service  756F7461-B5A3-F393-E0A9-E50E24DCCA9E
+  RX char  756F7462-B5A3-F393-E0A9-E50E24DCCA9E  (host→device, WRITE NO RSP)
+  TX char  756F7463-B5A3-F393-E0A9-E50E24DCCA9E  (device→host, NOTIFY)
+
+The NUS UUIDs (6E4000xx) are reserved on the device for RemoteIO so the
+user can connect with any standard NUS terminal app (nRF UART, LightBlue…).
 
 ota.json key: "bleName": "micro-ota"
 """
@@ -17,8 +20,8 @@ import sys
 import threading
 import time
 
-_NUS_RX = '6E400002-B5A3-F393-E0A9-E50E24DCCA9E'   # host → device
-_NUS_TX = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E'   # device → host (notify)
+_OTA_RX = '756F7462-B5A3-F393-E0A9-E50E24DCCA9E'   # host → device
+_OTA_TX = '756F7463-B5A3-F393-E0A9-E50E24DCCA9E'   # device → host (notify)
 
 _SCAN_TIMEOUT  = 10.0   # seconds to scan for device
 _RECV_TIMEOUT  = 30.0   # seconds to wait for data
@@ -185,7 +188,7 @@ class BLETransport:
         self._ack_sem = asyncio.Semaphore(0)
 
         # Subscribe to TX notifications (device → host)
-        await self._client.start_notify(_NUS_TX, self._on_notify)
+        await self._client.start_notify(_OTA_TX, self._on_notify)
         print('[BLE] Connected. MTU payload=%d bytes' % self._mtu)
 
     async def _disconnect(self):
@@ -201,7 +204,7 @@ class BLETransport:
         while offset < len(data):
             end   = min(offset + self._mtu, len(data))
             chunk = bytes(view[offset:end])
-            await self._client.write_gatt_char(_NUS_RX, chunk, response=False)
+            await self._client.write_gatt_char(_OTA_RX, chunk, response=False)
             window_sent += len(chunk)
             offset = end
             # Wait for device credit before sending the next window.

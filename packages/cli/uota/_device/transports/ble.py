@@ -1,14 +1,20 @@
 """
-BLE transport for micro-ota — Nordic UART Service (NUS) GATT server.
+BLE transport for micro-ota.
 
-Exposes the device as a BLE peripheral advertising the NUS service.
-The host connects and speaks the standard micro-ota OTA protocol over the
-TX/RX characteristics exactly as it would over TCP or UART.
+Two GATT services are registered on the same BLE peripheral:
 
-NUS UUIDs (128-bit, little-endian in ubluetooth):
-  Service  6E400001-B5A3-F393-E0A9-E50E24DCCA9E
-  RX char  6E400002-B5A3-F393-E0A9-E50E24DCCA9E  (host→device, WRITE)
-  TX char  6E400003-B5A3-F393-E0A9-E50E24DCCA9E  (device→host, NOTIFY)
+  OTA service  ("uota" UUIDs) — for the uota CLI
+    Service  756F7461-B5A3-F393-E0A9-E50E24DCCA9E
+    RX char  756F7462-B5A3-F393-E0A9-E50E24DCCA9E  (host→device, WRITE)
+    TX char  756F7463-B5A3-F393-E0A9-E50E24DCCA9E  (device→host, NOTIFY)
+
+  RemoteIO service  (Nordic UART Service / NUS UUIDs) — for user terminal apps
+    Service  6E400001-B5A3-F393-E0A9-E50E24DCCA9E
+    RX char  6E400002-B5A3-F393-E0A9-E50E24DCCA9E  (host→device, WRITE)
+    TX char  6E400003-B5A3-F393-E0A9-E50E24DCCA9E  (device→host, NOTIFY)
+
+Using NUS for RemoteIO lets the user connect with any standard NUS BLE
+terminal (nRF UART, LightBlue, etc.) without any custom app.
 
 ota.json keys:
   "bleName": "micro-ota"    # BLE advertisement name (max ~20 chars)
@@ -34,9 +40,9 @@ _WINDOW = 512       # host sends this many bytes between credit waits
 
 class _BLEConn:
     """
-    Socket-like wrapper over a BLE connection.
+    Socket-like wrapper over one GATT service within a BLE connection.
     recv() and sendall() use the same interface as TCP sockets so the OTA
-    server (_handle in ota.py) needs no changes.
+    server and RemoteIO handler need no changes.
     """
 
     def __init__(self, ble, conn_handle, tx_handle, initial_mtu=20):
@@ -46,14 +52,12 @@ class _BLEConn:
         self._mtu         = max(20, initial_mtu - 3)
         self._buf         = bytearray()
         self._closed      = False
-        self._rx_received = 0   # bytes received (IRQ) since last credit
+        self._rx_received = 0
 
     def set_mtu(self, mtu):
         self._mtu = max(20, mtu - 3)
 
     def _push(self, data):
-        # Called from IRQ — credit the host as data arrives so recv() never
-        # deadlocks waiting for data that the host is withholding for ACK.
         self._buf.extend(data)
         self._rx_received += len(data)
         while self._rx_received >= _WINDOW:
@@ -71,7 +75,7 @@ class _BLEConn:
                 raise OSError('BLE recv timeout')
             time.sleep_ms(5)
         chunk = bytes(self._buf[:n])
-        self._buf[:n] = b''  # del self._buf[:n] is not supported in MicroPython
+        self._buf[:n] = b''
         return chunk
 
     def sendall(self, data):
@@ -98,33 +102,43 @@ class _BLEConn:
 
 class BLETransport:
     """
-    OTA transport over BLE (Nordic UART Service).
+    OTA transport over BLE.
 
-    Works as a push-mode transport: start() registers the NUS service and
-    begins advertising; accept() blocks until a central connects and returns
-    a _BLEConn that the OTA server reads/writes.  After disconnect the
-    transport re-advertises automatically.
+    Registers two GATT services:
+      - OTA service (custom "uota" UUIDs): accept() / try_accept() return
+        connections for the OTA protocol.
+      - NUS service (standard NUS UUIDs): try_accept_remoteio() returns
+        connections for the RemoteIO channel (any NUS terminal app).
+
+    Both services share the same physical BLE connection.
     """
 
     def __init__(self, name='micro-ota'):
-        self._name       = name[:20]
-        self._ble        = None
-        self._rx_h       = None
-        self._tx_h       = None
-        self._conn       = None
-        self._pending    = None
-        self._mtu        = 20
-        self._registered = False
+        self._name           = name[:20]
+        self._ble            = None
+        self._ota_rx_h       = None
+        self._ota_tx_h       = None
+        self._nus_rx_h       = None
+        self._nus_tx_h       = None
+        self._conn           = None     # physical connection
+        self._ota_pending    = None     # _BLEConn for OTA
+        self._nus_pending    = None     # _BLEConn for NUS/RemoteIO
+        self._mtu            = 20
+        self._registered     = False
 
     # ── transport interface ───────────────────────────────────────────────────
 
     def start(self):
         import ubluetooth
-        self._SVC = ubluetooth.UUID('6E400001-B5A3-F393-E0A9-E50E24DCCA9E')
-        self._RX  = ubluetooth.UUID('6E400002-B5A3-F393-E0A9-E50E24DCCA9E')
-        self._TX  = ubluetooth.UUID('6E400003-B5A3-F393-E0A9-E50E24DCCA9E')
+        # OTA service UUIDs ("uota" prefix)
+        self._OTA_SVC = ubluetooth.UUID('756F7461-B5A3-F393-E0A9-E50E24DCCA9E')
+        self._OTA_RX  = ubluetooth.UUID('756F7462-B5A3-F393-E0A9-E50E24DCCA9E')
+        self._OTA_TX  = ubluetooth.UUID('756F7463-B5A3-F393-E0A9-E50E24DCCA9E')
+        # NUS service UUIDs (standard, for RemoteIO / user terminals)
+        self._NUS_SVC = ubluetooth.UUID('6E400001-B5A3-F393-E0A9-E50E24DCCA9E')
+        self._NUS_RX  = ubluetooth.UUID('6E400002-B5A3-F393-E0A9-E50E24DCCA9E')
+        self._NUS_TX  = ubluetooth.UUID('6E400003-B5A3-F393-E0A9-E50E24DCCA9E')
         self._ble = ubluetooth.BLE()
-        # In coexistence mode activate_hardware() skips BLE — activate it here.
         if not self._ble.active():
             self._ble.active(True)
             time.sleep_ms(100)
@@ -143,11 +157,6 @@ class BLETransport:
             pass
 
     def radio_pause(self):
-        """Fully deactivate BLE hardware so WiFi gets uncontested radio access.
-
-        Only safe to call when no BLE connection is active (advertising only).
-        After this, try_accept() returns None until radio_resume() is called.
-        """
         self.stop()
         try:
             if self._ble:
@@ -156,60 +165,70 @@ class BLETransport:
             pass
         self._ble        = None
         self._conn       = None
-        self._pending    = None
+        self._ota_pending = None
+        self._nus_pending = None
         self._registered = False
-        print('[BLE] Radio paused')
 
     def radio_resume(self):
-        """Re-activate BLE hardware and resume advertising."""
-        self.start()  # start() now activates hardware if needed
-        print('[BLE] Radio resumed')
+        self.start()
 
     def accept(self):
-        """Block until a BLE central connects; return the connection object."""
-        self._pending = None
-        while self._pending is None:
+        """Block until a BLE central connects; return the OTA connection."""
+        self._ota_pending = None
+        while self._ota_pending is None:
             time.sleep_ms(50)
-        conn = self._pending
-        self._pending = None
+        conn = self._ota_pending
+        self._ota_pending = None
         return conn
 
     def try_accept(self):
-        """Return a pending BLE connection immediately, or None."""
-        conn = self._pending
+        """Return a pending OTA connection immediately, or None."""
+        conn = self._ota_pending
         if conn is not None:
-            self._pending = None
+            self._ota_pending = None
+        return conn
+
+    def try_accept_remoteio(self):
+        """Return a pending NUS/RemoteIO connection immediately, or None."""
+        conn = self._nus_pending
+        if conn is not None:
+            self._nus_pending = None
         return conn
 
     # ── GATT setup ────────────────────────────────────────────────────────────
 
     def _register(self):
-        svc_def = (
-            self._SVC,
+        ota_svc = (
+            self._OTA_SVC,
             (
-                (self._RX, _F_WRITE | _F_WRITE_NR),
-                (self._TX, _F_READ  | _F_NOTIFY),
+                (self._OTA_RX, _F_WRITE | _F_WRITE_NR),
+                (self._OTA_TX, _F_READ  | _F_NOTIFY),
             ),
         )
-        ((self._rx_h, self._tx_h),) = self._ble.gatts_register_services((svc_def,))
-        # Default GATT attribute buffer is 20 bytes; ATT writes from the host are
-        # up to MTU-3 = 253 bytes.  Without this, Bluedroid silently truncates
-        # every write to 20 bytes and still sends the ATT WRITE RESPONSE, so the
-        # host reports 100% while the device receives ~8% of the stream.
-        self._ble.gatts_set_buffer(self._rx_h, 512)
-        print('[BLE] RX buffer set to 512 bytes')
+        nus_svc = (
+            self._NUS_SVC,
+            (
+                (self._NUS_RX, _F_WRITE | _F_WRITE_NR),
+                (self._NUS_TX, _F_READ  | _F_NOTIFY),
+            ),
+        )
+        ((self._ota_rx_h, self._ota_tx_h),
+         (self._nus_rx_h, self._nus_tx_h)) = self._ble.gatts_register_services(
+            (ota_svc, nus_svc)
+        )
+        self._ble.gatts_set_buffer(self._ota_rx_h, 512)
+        self._ble.gatts_set_buffer(self._nus_rx_h, 512)
 
     def _advertise(self):
-        # BLE advertising data is limited to 31 bytes.
-        # flags(3) + name_ad(2+len) fits easily; the 16-byte UUID goes in
-        # scan response to avoid exceeding the limit.
-        name_b   = self._name.encode()
-        flags    = b'\x02\x01\x06'
-        svc_uuid = bytes(reversed(bytes.fromhex('6E400001B5A3F393E0A9E50E24DCCA9E')))
+        name_b    = self._name.encode()
+        flags     = b'\x02\x01\x06'
+        # Advertise OTA service UUID in the scan response so scanners can
+        # identify this as a micro-ota device; NUS is discoverable via GATT.
+        ota_uuid  = bytes(reversed(bytes.fromhex('756F7461B5A3F393E0A9E50E24DCCA9E')))
         adv_data  = flags + bytes([len(name_b) + 1, 0x09]) + name_b
-        resp_data = bytes([len(svc_uuid) + 1, 0x07]) + svc_uuid
-        # 500 ms interval: BLE broadcasts twice per second instead of 10×,
-        # leaving the 2.4 GHz radio free for WiFi between advertisements.
+        resp_data = bytes([len(ota_uuid) + 1, 0x07]) + ota_uuid
+        # 500 ms interval: BLE broadcasts twice per second, leaving the 2.4 GHz
+        # radio mostly free for WiFi during coexistence windows.
         self._ble.gap_advertise(500_000, adv_data=adv_data, resp_data=resp_data)
 
     # ── IRQ handler ───────────────────────────────────────────────────────────
@@ -217,28 +236,40 @@ class BLETransport:
     def _irq(self, event, data):
         if event == _IRQ_CONNECT:
             conn_handle, _, _ = data
-            conn = _BLEConn(self._ble, conn_handle, self._tx_h, self._mtu)
-            self._conn    = conn
-            self._pending = conn
+            ota = _BLEConn(self._ble, conn_handle, self._ota_tx_h, self._mtu)
+            nus = _BLEConn(self._ble, conn_handle, self._nus_tx_h, self._mtu)
+            self._conn        = (ota, nus)
+            self._ota_pending = ota
+            self._nus_pending = nus
             print('[BLE] Client connected')
 
         elif event == _IRQ_DISCONNECT:
             conn_handle, _, _ = data
-            if self._conn and self._conn._conn == conn_handle:
-                self._conn._closed = True
-                self._conn = None
+            if self._conn:
+                ota, nus = self._conn
+                if ota._conn == conn_handle:
+                    ota._closed = True
+                    nus._closed = True
+                    self._conn = None
             print('[BLE] Client disconnected — re-advertising')
             self._advertise()
 
         elif event == _IRQ_WRITE:
             conn_handle, attr_handle = data
-            if attr_handle == self._rx_h and self._conn:
-                payload = self._ble.gatts_read(self._rx_h)
-                self._conn._push(payload)
+            if self._conn:
+                ota, nus = self._conn
+                payload = self._ble.gatts_read(attr_handle)
+                if attr_handle == self._ota_rx_h:
+                    ota._push(payload)
+                elif attr_handle == self._nus_rx_h:
+                    nus._push(payload)
 
         elif event == _IRQ_MTU:
             conn_handle, mtu = data
             self._mtu = mtu
-            if self._conn and self._conn._conn == conn_handle:
-                self._conn.set_mtu(mtu)
+            if self._conn:
+                ota, nus = self._conn
+                if ota._conn == conn_handle:
+                    ota.set_mtu(mtu)
+                    nus.set_mtu(mtu)
             print('[BLE] MTU negotiated:', mtu)

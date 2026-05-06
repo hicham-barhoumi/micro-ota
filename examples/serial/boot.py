@@ -11,8 +11,7 @@ boot_guard.boot()
 OTAUpdater.activate_hardware()
 
 # Launch the user application in a dedicated thread so it runs concurrently
-# with the OTA server.  activate_hardware() only activates WiFi STA for
-# WiFi+BLE boards (no BLE heap allocation yet), so 8 KB stack is safe here.
+# with the OTA server.  8 KB stack is sufficient for a simple app loop.
 import _thread
 def _run_app():
     try:
