@@ -66,7 +66,7 @@ class _BLEConn:
             if self._closed:
                 if self._buf:
                     break
-                raise OSError('BLE connection closed')
+                raise EOFError
             if time.ticks_diff(deadline, time.ticks_ms()) <= 0:
                 raise OSError('BLE recv timeout')
             time.sleep_ms(5)

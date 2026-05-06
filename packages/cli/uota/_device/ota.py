@@ -211,7 +211,6 @@ def _authenticate(conn, cfg):
 def _handle_ota(conn, cfg):
     _send(conn, 'ready\n')
     new_manifest = None
-    staged = []          # list of final_paths that were staged
 
     try:
         while True:
@@ -224,7 +223,7 @@ def _handle_ota(conn, cfg):
                 return
 
             if header == b'end_ota':
-                _commit(new_manifest, staged)
+                _commit(new_manifest)
                 _send(conn, 'ok\n')
                 try: conn.close()
                 except Exception: pass
@@ -274,7 +273,6 @@ def _handle_ota(conn, cfg):
                     _send(conn, 'sha256_mismatch ' + filename + '\n')
                     raise OSError('SHA256 mismatch: ' + filename)
 
-                staged.append('/' + filename.lstrip('/'))
                 print('[OTA] Staged:', filename, '(%d B)' % size)
                 _send(conn, 'ok\n')
 
@@ -290,7 +288,7 @@ def _handle_ota(conn, cfg):
             pass
 
 
-def _commit(new_manifest, staged):
+def _commit(new_manifest):
     # 1. Load old manifest → find files to delete
     old_files = set()
     try:
@@ -427,7 +425,7 @@ def _handle_stream_ota(conn, cfg):
             print('[OTA] Stream HMAC mismatch — update rejected')
             return
 
-        _commit(new_manifest, list(new_manifest['files'].keys()))
+        _commit(new_manifest)
         _send(conn, 'ok\n')
         try: conn.close()
         except Exception: pass

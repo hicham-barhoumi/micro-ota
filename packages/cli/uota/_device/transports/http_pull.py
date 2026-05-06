@@ -20,6 +20,8 @@ import os
 import socket
 import time
 
+from ota import _is_dir, _makedirs, _remove_tree, _walk_stage, _STAGE, _MANIFEST, _VERSION
+
 
 # ── tiny HTTP client ──────────────────────────────────────────────────────────
 
@@ -83,65 +85,14 @@ def _http_get(url, stream_to=None, timeout=15):
         s.close()
 
 
-# ── filesystem helpers (self-contained, no import from ota.py) ────────────────
+# ── commit helper ─────────────────────────────────────────────────────────────
 
-_STAGE = '/ota_stage'
-_MANIFEST = '/ota_manifest.json'
-_VERSION  = '/ota_version.json'
-_PROTECTED = frozenset(['lib', 'data', 'config', 'boot.py', 'ota_manifest.json', 'ota_version.json', 'ota_boot_state.json'])
-
-
-def _makedirs(path):
-    parts = path.strip('/').split('/')
-    cur = ''
-    for p in parts:
-        cur += '/' + p
-        try:
-            os.mkdir(cur)
-        except OSError:
-            pass
-
-
-def _is_dir(path):
-    try:
-        return os.stat(path)[0] & 0x4000 != 0
-    except OSError:
-        return False
-
-
-def _remove_tree(path):
-    try:
-        if _is_dir(path):
-            for entry in os.listdir(path):
-                _remove_tree(path + '/' + entry)
-            os.rmdir(path)
-        else:
-            os.remove(path)
-    except OSError:
-        pass
-
-
-def _walk(d, root=None):
-    """Yield (full_path, path_relative_to_root) for every file under d."""
-    if root is None:
-        root = d
-    for entry in os.listdir(d):
-        full = d + '/' + entry
-        if _is_dir(full):
-            yield from _walk(full, root)
-        else:
-            yield full, full[len(root):]   # rel keeps leading /
-
-
-def _sha256_file(path):
-    h = hashlib.sha256()
-    with open(path, 'rb') as f:
-        while True:
-            chunk = f.read(512)
-            if not chunk:
-                break
-            h.update(chunk)
-    return ''.join('%02x' % b for b in h.digest())
+# Top-level names that http_pull never auto-deletes (more conservative than
+# the push-transport _commit which only protects /lib/uota/ and /boot.py).
+_PROTECTED = frozenset([
+    'lib', 'data', 'config',
+    'boot.py', 'ota_manifest.json', 'ota_version.json', 'ota_boot_state.json',
+])
 
 
 def _commit_pull(new_manifest):
@@ -163,8 +114,7 @@ def _commit_pull(new_manifest):
             pass
 
     # 2. Move staged files to final locations
-    for stage_path, rel_path in _walk(_STAGE):
-        final = rel_path   # already has leading /
+    for stage_path, final in _walk_stage():
         _makedirs('/'.join(final.split('/')[:-1]))
         try:
             os.remove(final)
@@ -217,6 +167,9 @@ class HttpPullTransport:
 
     # Marker for OTAUpdater to treat this as a pull transport
     is_pull = True
+
+    def start(self): pass
+    def stop(self):  pass
 
     def _mpy_manifest_url(self):
         mpy = _mpy_version()

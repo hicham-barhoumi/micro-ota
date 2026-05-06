@@ -8,6 +8,7 @@ Commands:
   bootstrap  [--port PORT] [--baud BAUD] [--mpy]
   fast        [--host HOST] [--port PORT] [--transport T] [--ble-name N] [--password P] [--version VER]
   full        [--host HOST] [--port PORT] [--transport T] [--ble-name N] [--password P] [--version VER] [--wipe]
+  wipe        [--host HOST] [--port PORT] [--transport T] [--ble-name N] [--password P]
   terminal    [--host HOST] [--port PORT] [--transport T] [--ble-name N] [--password P]
   version     [--host HOST] [--port PORT] [--transport T] [--ble-name N] [--password P]
   flash <firmware.bin> [--port PORT] [--baud BAUD] [--chip CHIP] [--erase]
@@ -833,6 +834,21 @@ def cmd_version(args, cfg):
         print(transport.read_line())
 
 
+def cmd_wipe(args, cfg):
+    password = getattr(args, 'password', None) or cfg.get('otaPassword', '')
+    ble_name = getattr(args, 'ble_name', None)
+    transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None),
+                              ble_name_override=ble_name)
+    with transport:
+        _do_auth(transport, password)
+        transport.write_line('wipe')
+        resp = transport.read_line().strip()
+        if resp == 'ok':
+            print('Device wiped. /lib, /config, and /boot.py preserved.')
+        else:
+            print('Unexpected response:', resp)
+
+
 def cmd_flash(args, cfg):
     from .firmware import flash, _find_port
     port = args.port or _find_port(cfg)
@@ -924,6 +940,14 @@ def main():
     fu.add_argument('--password',  metavar='PW',
                     help='OTA session password (overrides otaPassword in ota.json)')
 
+    # wipe
+    wi = sub.add_parser('wipe', help='Delete user files on device (preserves /lib, /config, /boot.py)')
+    wi.add_argument('--host')
+    wi.add_argument('--port',      type=int)
+    wi.add_argument('--transport', choices=['wifi_tcp', 'serial', 'ble'])
+    wi.add_argument('--ble-name',  dest='ble_name', metavar='NAME')
+    wi.add_argument('--password',  metavar='PW')
+
     # terminal
     te = sub.add_parser('terminal', help='Interactive device terminal')
     te.add_argument('--host')
@@ -978,6 +1002,7 @@ def main():
         'bootstrap': cmd_bootstrap,
         'fast':      cmd_fast,
         'full':      cmd_full,
+        'wipe':      cmd_wipe,
         'terminal':  cmd_terminal,
         'version':   cmd_version,
         'flash':     cmd_flash,
