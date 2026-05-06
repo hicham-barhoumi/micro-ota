@@ -40,19 +40,25 @@ class _BLEConn:
     """
 
     def __init__(self, ble, conn_handle, tx_handle, initial_mtu=20):
-        self._ble        = ble
-        self._conn       = conn_handle
-        self._tx         = tx_handle
-        self._mtu        = max(20, initial_mtu - 3)
-        self._buf        = bytearray()
-        self._closed     = False
-        self._rx_pending = 0   # bytes consumed since last credit
+        self._ble         = ble
+        self._conn        = conn_handle
+        self._tx          = tx_handle
+        self._mtu         = max(20, initial_mtu - 3)
+        self._buf         = bytearray()
+        self._closed      = False
+        self._rx_received = 0   # bytes received (IRQ) since last credit
 
     def set_mtu(self, mtu):
         self._mtu = max(20, mtu - 3)
 
     def _push(self, data):
+        # Called from IRQ — credit the host as data arrives so recv() never
+        # deadlocks waiting for data that the host is withholding for ACK.
         self._buf.extend(data)
+        self._rx_received += len(data)
+        while self._rx_received >= _WINDOW:
+            self._ble.gatts_notify(self._conn, self._tx, _ACK)
+            self._rx_received -= _WINDOW
 
     def recv(self, n):
         deadline = time.ticks_add(time.ticks_ms(), 30_000)
@@ -66,10 +72,6 @@ class _BLEConn:
             time.sleep_ms(5)
         chunk = bytes(self._buf[:n])
         self._buf[:n] = b''  # del self._buf[:n] is not supported in MicroPython
-        self._rx_pending += len(chunk)
-        while self._rx_pending >= _WINDOW:
-            self._ble.gatts_notify(self._conn, self._tx, _ACK)
-            self._rx_pending -= _WINDOW
         return chunk
 
     def sendall(self, data):

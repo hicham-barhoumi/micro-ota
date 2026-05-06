@@ -169,13 +169,17 @@ class BLETransport:
         self._client = BleakClient(device)
         await self._client.connect()
 
-        # Negotiate larger MTU where possible (bleak handles this automatically
-        # on supported platforms; the device IRQ will update its own _mtu)
+        # Negotiate larger MTU. On Linux/BlueZ, BleakClient wraps a backend
+        # that exposes _acquire_mtu(); calling it issues an AcquireWrite DBus
+        # call which returns the real negotiated MTU (default stays at 23).
         try:
+            backend = getattr(self._client, '_backend', self._client)
+            if hasattr(backend, '_acquire_mtu'):
+                await backend._acquire_mtu()
             mtu = self._client.mtu_size
             if mtu:
                 self._mtu = max(20, mtu - 3)
-        except AttributeError:
+        except Exception:
             pass
 
         self._ack_sem = asyncio.Semaphore(0)

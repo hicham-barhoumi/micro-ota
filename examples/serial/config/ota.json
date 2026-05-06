@@ -1,6 +1,6 @@
 {
     "version": "1.0.0",
-    "hostname": "192.168.137.57",
+    "hostname": "micro-ota.local",
     "port": 2018,
     "remoteioPort": 2019,
     "ssid": "YOUR_WIFI_SSID",
@@ -8,8 +8,7 @@
     "bleName": "micro-ota",
     "otaKey": "",
     "transports": [
-        "wifi_tcp",
-        "ble"
+        "wifi_tcp"
     ],
     "manifestUrl": "http://192.168.249.128:8080/manifest.json",
     "pullInterval": 60,
