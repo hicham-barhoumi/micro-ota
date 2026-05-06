@@ -124,6 +124,10 @@ class BLETransport:
         self._RX  = ubluetooth.UUID('6E400002-B5A3-F393-E0A9-E50E24DCCA9E')
         self._TX  = ubluetooth.UUID('6E400003-B5A3-F393-E0A9-E50E24DCCA9E')
         self._ble = ubluetooth.BLE()
+        # In coexistence mode activate_hardware() skips BLE — activate it here.
+        if not self._ble.active():
+            self._ble.active(True)
+            time.sleep_ms(100)
         self._ble.irq(self._irq)
         if not self._registered:
             self._register()
@@ -132,14 +136,34 @@ class BLETransport:
         print('[BLE] Advertising as "%s"' % self._name)
 
     def stop(self):
-        # Stop advertising only — do not deactivate BLE hardware.
-        # Hardware was activated in activate_hardware() and must stay up;
-        # cycling ble.active() mid-session causes an HCI error.
         try:
             if self._ble:
                 self._ble.gap_advertise(None)
         except Exception:
             pass
+
+    def radio_pause(self):
+        """Fully deactivate BLE hardware so WiFi gets uncontested radio access.
+
+        Only safe to call when no BLE connection is active (advertising only).
+        After this, try_accept() returns None until radio_resume() is called.
+        """
+        self.stop()
+        try:
+            if self._ble:
+                self._ble.active(False)
+        except Exception:
+            pass
+        self._ble        = None
+        self._conn       = None
+        self._pending    = None
+        self._registered = False
+        print('[BLE] Radio paused')
+
+    def radio_resume(self):
+        """Re-activate BLE hardware and resume advertising."""
+        self.start()  # start() now activates hardware if needed
+        print('[BLE] Radio resumed')
 
     def accept(self):
         """Block until a BLE central connects; return the connection object."""

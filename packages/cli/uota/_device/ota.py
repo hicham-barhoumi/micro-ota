@@ -648,7 +648,12 @@ class OTAUpdater:
         """Activate radios that OTA needs. Must be called from the main thread.
         Only activates what is configured — avoid activating WiFi on BLE-only
         boards: BLE+WiFi coexist init consumes enough heap to prevent thread
-        creation, and the BLE stack init itself aborts when WiFi is already up."""
+        creation, and the BLE stack init itself aborts when WiFi is already up.
+
+        When both WiFi and BLE are configured the run() loop manages radio
+        time-slicing (WiFi window → BLE window), so BLE is NOT pre-activated
+        here — it would immediately disrupt the WiFi radio.
+        """
         try:
             import json as _json
             with open('/config/ota.json') as _f:
@@ -656,10 +661,13 @@ class OTAUpdater:
         except Exception:
             _cfg = {}
         _t = _cfg.get('transports', ['ble'])
-        if any(x in _t for x in ('wifi_tcp', 'http_pull')):
+        _has_wifi = any(x in _t for x in ('wifi_tcp', 'http_pull'))
+        _has_ble  = 'ble' in _t
+        if _has_wifi:
             import network as _net
             _net.WLAN(_net.STA_IF).active(True)
-        if 'ble' in _t:
+        if _has_ble and not _has_wifi:
+            # BLE-only config: pre-activate here (no WiFi coexistence concern).
             import ubluetooth as _ub
             _ub.BLE().active(True)
 
@@ -752,8 +760,20 @@ class OTAUpdater:
         # Connect WiFi (has 'ssid' attr) before BLE starts advertising to avoid
         # coexistence interference during 802.11 association on the shared radio.
         transports.sort(key=lambda t: 0 if hasattr(t, 'ssid') else 1)
+
+        # Detect mixed WiFi+BLE config: the ESP32 shares one 2.4 GHz radio and
+        # ble.active(True) alone (even without advertising) breaks WiFi ARP.
+        # Solution: alternate between a WiFi window and a BLE window so only
+        # one radio stack is active at a time.
+        _coex_ts  = [t for t in transports if hasattr(t, 'radio_pause')]
+        _has_coex = bool(_coex_ts) and any(hasattr(t, 'ssid') for t in transports)
+        _WIFI_WIN = 60_000   # ms — WiFi window duration
+        _BLE_WIN  = 30_000   # ms — BLE window duration
+
         started = []
         for t in transports:
+            if _has_coex and t in _coex_ts:
+                continue   # defer BLE start; run() activates it in the BLE window
             try:
                 t.start()
                 started.append(t)
@@ -762,6 +782,13 @@ class OTAUpdater:
         push = [t for t in started if not getattr(t, 'is_pull', False)]
         pull = [t for t in started if getattr(t, 'is_pull', False)]
         pull_next = {id(t): time.ticks_ms() for t in pull}
+
+        # Coexistence state (only used when _has_coex is True)
+        _in_ble_win   = False
+        _win_switch   = time.ticks_add(time.ticks_ms(), _WIFI_WIN)
+        if _has_coex:
+            print('[OTA] Coexistence mode: WiFi window %ds / BLE window %ds' % (
+                _WIFI_WIN // 1000, _BLE_WIN // 1000))
 
         rio = self._make_remoteio()
         if rio:
@@ -777,8 +804,39 @@ class OTAUpdater:
         print('[OTA] Event loop started')
         try:
             while True:
+                # ── coexistence window switching ──────────────────────────────
+                if _has_coex:
+                    _now = time.ticks_ms()
+                    if time.ticks_diff(_now, _win_switch) >= 0:
+                        if _in_ble_win:
+                            # End BLE window → back to WiFi
+                            for _t in _coex_ts:
+                                try: _t.radio_pause()
+                                except Exception: pass
+                            _in_ble_win = False
+                            _win_switch = time.ticks_add(_now, _WIFI_WIN)
+                            print('[OTA] WiFi window (%ds)' % (_WIFI_WIN // 1000))
+                        else:
+                            # End WiFi window → switch to BLE
+                            for _t in _coex_ts:
+                                try:
+                                    _t.radio_resume()
+                                    if _t not in push:
+                                        push.append(_t)
+                                except Exception as _e:
+                                    print('[OTA] BLE window start:', _e)
+                            _in_ble_win = True
+                            _win_switch = time.ticks_add(_now, _BLE_WIN)
+                            print('[OTA] BLE window (%ds)' % (_BLE_WIN // 1000))
+
+                # Only poll transports appropriate for the current radio window.
+                _active_push = push if not _has_coex else (
+                    _coex_ts if _in_ble_win
+                    else [t for t in push if t not in _coex_ts]
+                )
+
                 # ── push transports ───────────────────────────────────────────
-                for t in push:
+                for t in _active_push:
                     try:
                         conn = t.try_accept()
                     except Exception as e:
@@ -790,6 +848,12 @@ class OTAUpdater:
                         except Exception as e2: print('[OTA] Restart failed:', e2)
                         conn = None
                     if conn is not None:
+                        # Extend the current window on activity.
+                        if _has_coex:
+                            _win_switch = time.ticks_add(
+                                time.ticks_ms(),
+                                _BLE_WIN if _in_ble_win else _WIFI_WIN
+                            )
                         self._serve_conn(conn)
 
                 # ── pull transports ───────────────────────────────────────────
@@ -837,6 +901,10 @@ class OTAUpdater:
             # KeyboardInterrupt — prevents EADDRINUSE / ENOBUFS on re-entry.
             for t in started:
                 try: t.stop()
+                except Exception: pass
+            # Deactivate BLE transports that were deferred (coex mode).
+            for t in _coex_ts:
+                try: t.radio_pause()
                 except Exception: pass
             if rio is not None:
                 try: rio.stop()
