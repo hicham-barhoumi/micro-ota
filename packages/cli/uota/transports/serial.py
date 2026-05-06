@@ -285,10 +285,11 @@ class SerialOTATransport:
                 '\nCheck port/baud or press Reset on the device.'
             )
 
-        # Fast path: invoke ota.serve_serial() already on the device.
-        # This avoids injecting ~13 KB of inline server code on every call.
-        # Falls back to the inline server when uota is absent (bootstrap).
-        self._ser.write(b'from uota.ota import serve_serial as _s; _s()')
+        # Fast path: invoke serve_serial() from the device's /lib/uota/ota.py.
+        # serve_serial() suppresses sys.stdout so background threads can't
+        # corrupt the binary protocol.  Falls back to the inline server on
+        # un-bootstrapped devices where ota.py is absent.
+        self._ser.write(b'from ota import serve_serial as _s; _s()')
         self._ser.write(b'\x04')   # Ctrl+D: execute
         self._ser.flush()
 

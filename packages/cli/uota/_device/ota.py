@@ -900,7 +900,6 @@ class OTAUpdater:
             for t in started:
                 try: t.stop()
                 except Exception: pass
-            # Deactivate BLE transports that were deferred (coex mode).
             for t in _coex_ts:
                 try: t.radio_pause()
                 except Exception: pass

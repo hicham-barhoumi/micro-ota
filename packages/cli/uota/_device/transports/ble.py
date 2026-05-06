@@ -208,7 +208,9 @@ class BLETransport:
         svc_uuid = bytes(reversed(bytes.fromhex('6E400001B5A3F393E0A9E50E24DCCA9E')))
         adv_data  = flags + bytes([len(name_b) + 1, 0x09]) + name_b
         resp_data = bytes([len(svc_uuid) + 1, 0x07]) + svc_uuid
-        self._ble.gap_advertise(100_000, adv_data=adv_data, resp_data=resp_data)
+        # 500 ms interval: BLE broadcasts twice per second instead of 10×,
+        # leaving the 2.4 GHz radio free for WiFi between advertisements.
+        self._ble.gap_advertise(500_000, adv_data=adv_data, resp_data=resp_data)
 
     # ── IRQ handler ───────────────────────────────────────────────────────────
 

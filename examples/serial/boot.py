@@ -11,8 +11,8 @@ boot_guard.boot()
 OTAUpdater.activate_hardware()
 
 # Launch the user application in a dedicated thread so it runs concurrently
-# with the OTA server.  16 KB is the maximum stable stack on ESP32 once the
-# WiFi/BLE stacks are live; the main thread keeps the full system stack.
+# with the OTA server.  activate_hardware() only activates WiFi STA for
+# WiFi+BLE boards (no BLE heap allocation yet), so 8 KB stack is safe here.
 import _thread
 def _run_app():
     try:
@@ -22,7 +22,7 @@ def _run_app():
         _app.run()
     except Exception as _e:
         print('[App] Error:', _e)
-_thread.stack_size(16 * 1024)
+_thread.stack_size(8 * 1024)
 _thread.start_new_thread(_run_app, ())
 
 try:
