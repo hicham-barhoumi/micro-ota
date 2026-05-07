@@ -55,20 +55,25 @@ See `examples/serial/` for a complete starter project.
 ## How it works
 
 ```
-[ PC ]   uota fast              uota remoteio listen
-            │  TCP :2018               │  TCP :2019
+[ PC ]   uota fast              uota remoteio listen / call
+            │  TCP :2018               │  TCP :2019  (or BLE NUS)
             ▼                          ▼
 [ ESP32 ]  /lib/uota/ota.py  ──  /lib/uota/remoteio.py
                 │             /lib/uota/boot_guard.py
                 ▼
-           /app/app.py  (your app)
+           /app/app.py  (runs in its own thread)
 ```
 
-Three background threads start at boot:
+At boot, `boot.py` starts two things:
 
-- **OTA server** (port 2018) — accepts file pushes, verifies HMAC signature, applies atomically, resets.
-- **RemoteIO server** (port 2019) — forwards `print()` output to the host and handles named RPC calls.
-- **Boot guard** — counts consecutive crashes so a bad update can never brick the device.
+- **User app thread** — your `app.run()` in a dedicated `_thread`, running concurrently with the OTA server.
+- **OTA event loop** (main thread, non-blocking) — polls all configured transports and the RemoteIO server for incoming connections; no additional threads.
+
+The OTA event loop handles:
+- **OTA server** (port 2018 or BLE OTA service) — verifies HMAC, applies files atomically, resets.
+- **RemoteIO server** (port 2019 when WiFi is active; BLE NUS when BLE-only) — streams `print()` output and dispatches RPC calls.
+- **HTTP pull transport** — polls a manifest URL periodically and self-updates when the version changes.
+- **Boot guard** — counts consecutive unclean boots so a bad update can never permanently brick the device.
 
 WiFi TCP, USB serial, BLE (Nordic UART Service), and HTTP pull are all supported.
 
@@ -79,7 +84,7 @@ WiFi TCP, USB serial, BLE (Nordic UART Service), and HTTP pull are all supported
 After `uota bootstrap`, the device looks like this:
 
 ```
-/boot.py                       ← starts OTA + RemoteIO threads
+/boot.py                       ← starts app thread + OTA event loop
 /main.py                       ← calls app.run()
 /app/
     app.py                     ← your application
@@ -216,7 +221,7 @@ OTA import breakdown (`.py` / `.mpy`):
 | `_thread.start_new_thread` | 2 ms | 1 ms |
 | `import app` | 47 ms | 29 ms |
 
-The dominant cost is parsing and compiling `ota.py` on every boot. Pre-compiling with `--mpy` cuts that step from 519 ms to 154 ms — **70% faster**. `boot.py` and `main.py` finish before the OTA thread connects to WiFi — your app is already running while OTA initialises in the background.
+The dominant cost is parsing and compiling `ota.py` on every boot. Pre-compiling with `--mpy` cuts that step from 519 ms to 154 ms — **70% faster**. `boot.py` finishes quickly; your app is running in its thread while the OTA event loop initialises WiFi and starts listening in the background.
 
 ### RAM
 
@@ -236,10 +241,10 @@ Tight Python loop throughput (500 ms window):
 
 | Scenario | Iterations | Overhead |
 |---|---|---|
-| No OTA thread | 28,660 | — |
-| OTA thread idle (blocked on `accept()`) | 28,656 | **< 1%** |
+| No OTA server | 28,660 | — |
+| OTA event loop idle (non-blocking poll) | 28,656 | **< 1%** |
 
-Once the OTA server is listening, it sleeps on `socket.accept()` and releases the GIL fully. Your app runs at full Python speed.
+The OTA event loop calls `try_accept()` on each transport (non-blocking `poll(0)`) and immediately yields to the next iteration when no connection is pending. Your app runs in its own thread at full Python speed.
 
 ---
 
@@ -283,7 +288,9 @@ pip install micro-ota[ble]
 uota fast --transport ble
 ```
 
-The device advertises as a BLE peripheral. The host scans by name, connects, and speaks the standard protocol over NUS characteristics.
+The device advertises as a BLE peripheral. The host scans by name, connects, and speaks the standard OTA protocol over the micro-ota GATT service (UUID prefix `756F74xx`). A separate NUS service (UUID prefix `6E4000xx`) is reserved for RemoteIO so any standard NUS terminal app (nRF UART, LightBlue) can connect simultaneously.
+
+**WiFi + BLE simultaneously** — the ESP32's single 2.4 GHz radio can run both transports at the same time only when PSRAM is present (e.g. ESP32-WROVER, Python heap > 200 KB). On standard ESP32 modules, the OTA server logs a warning and starts only the first transport listed in `transports`.
 
 ### HTTP Pull
 
@@ -329,38 +336,27 @@ Leave `otaKey` empty (the default) to disable signing.
 
 ## RemoteIO
 
-A persistent TCP side-channel on port 2019 for two things: streaming all `print()` output from the device to your terminal in real time, and calling named RPC handlers on the device from the host.
+A persistent side-channel for two things: streaming all `print()` output from the device to your terminal in real time, and calling named RPC handlers on the device from the host.
 
-### Enable in boot.py
-
-RemoteIO is opt-in. Add a second thread to your `boot.py`:
-
-```python
-import _thread
-
-def _remoteio():
-    try:
-        import remoteio
-        remoteio.run()
-    except Exception as e:
-        print('[RemoteIO] Failed:', e)
-
-_thread.start_new_thread(_remoteio, ())
-```
+RemoteIO starts automatically as part of the OTA event loop — no extra configuration needed. When WiFi is active it listens on TCP port 2019. When the device is BLE-only it accepts connections over the BLE NUS service (UUID `6E400001`).
 
 Requires `LWIP_MAX_SOCKETS >= 2` in the firmware (standard ESP32 builds have this).
 
 ### CLI
 
 ```bash
-# Stream all device print() output live
+# Stream all device print() output live (WiFi TCP)
 uota remoteio listen
+uota remoteio listen --transport ble    # via BLE NUS
 
-# Call built-in handlers
+# Call built-in handlers (WiFi TCP by default)
 uota remoteio call ping                 # → "pong"
 uota remoteio call uptime_ms            # → 35712
 uota remoteio call free_mem             # → 98304
 uota remoteio call version              # → {"version": "1.0.0"}
+
+# Same calls over BLE NUS (device in BLE-only mode)
+uota remoteio call ping --transport ble
 
 # Call a custom handler with arguments
 uota remoteio call set_led state=true
@@ -377,14 +373,26 @@ The `listen` command blocks and prints everything the device `print()`s — usef
 
 ### Python API
 
+**WiFi TCP** (device reachable on the network):
+
 ```python
 from uota.remoteio import RemoteIOClient
 
 with RemoteIOClient('micropython.local') as rio:
-    print(rio.call('ping'))             # 'pong'
-    print(rio.call('uptime_ms'))        # 35712
-    print(rio.call('free_mem'))         # 98304
-    print(rio.call('set_led', state=True))   # 'ok'
+    print(rio.call('ping'))                   # 'pong'
+    print(rio.call('uptime_ms'))              # 35712
+    print(rio.call('free_mem'))               # 98304
+    print(rio.call('set_led', state=True))    # 'ok'
+```
+
+**BLE NUS** (device in BLE-only mode, `pip install micro-ota[ble]`):
+
+```python
+from uota.remoteio import RemoteIOBLEClient
+
+with RemoteIOBLEClient('micro-ota') as rio:  # scans by BLE name
+    print(rio.call('ping'))                   # 'pong'
+    print(rio.call('free_mem'))               # 98304
 ```
 
 Use it in scripts for automated testing or monitoring:
@@ -614,15 +622,25 @@ Extensions → ⋯ → Install from VSIX…
 
 ## Tests
 
-```bash
-# All unit tests (no hardware required)
-python3 -m pytest tests/ --ignore=tests/test_hardware.py
+`tests/test_all_transports.py` is a hardware-in-the-loop suite that covers every transport × operation combination — ping, version, ls, get, rm, stream_ota (fast), start_ota (full), wipe, reset, and RemoteIO — on WiFi TCP, BLE OTA, BLE NUS RemoteIO, and USB serial.
 
-# Hardware-in-the-loop (ESP32 on /dev/ttyUSB0)
-python3 -m pytest tests/test_hardware.py
-SKIP_SERIAL=1 python3 -m pytest tests/test_hardware.py   # WiFi only
-SKIP_WIFI=1   python3 -m pytest tests/test_hardware.py   # serial only
+```bash
+# Full suite (ESP32 on /dev/ttyUSB0, WiFi hotspot active, BLE dongle present)
+python3 tests/test_all_transports.py
+
+# Skip individual transports
+SKIP_SERIAL=1  python3 tests/test_all_transports.py   # WiFi + BLE only
+SKIP_WIFI=1    python3 tests/test_all_transports.py   # BLE + serial only
+SKIP_BLE=1     python3 tests/test_all_transports.py   # WiFi + serial only
+
+# Override auto-detected device IP (useful when mDNS is unavailable)
+WIFI_HOST=192.168.1.42 python3 tests/test_all_transports.py
+
+# Override serial port
+SERIAL_PORT=/dev/ttyUSB1 python3 tests/test_all_transports.py
 ```
+
+The suite handles transport switching automatically (serial raw-REPL injection is always available regardless of which wireless transport the device is currently running) and resets the BlueZ adapter between BLE phases to clear stale state.
 
 ---
 
