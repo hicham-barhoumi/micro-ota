@@ -28,6 +28,172 @@ import sys
 import threading
 
 
+class RemoteIOBLEClient:
+    """
+    RemoteIO client over BLE NUS (Nordic UART Service).
+
+    Connects to the NUS service on the micro-ota device and speaks the same
+    JSON-over-connection protocol as RemoteIOClient, but over BLE instead of TCP.
+
+    NUS UUIDs:
+      Service  6E400001-B5A3-F393-E0A9-E50E24DCCA9E
+      RX char  6E400002-B5A3-F393-E0A9-E50E24DCCA9E  (host→device, WRITE NO RSP)
+      TX char  6E400003-B5A3-F393-E0A9-E50E24DCCA9E  (device→host, NOTIFY)
+
+    Usage:
+        from uota.remoteio import RemoteIOBLEClient
+
+        with RemoteIOBLEClient('micro-ota') as rio:
+            print(rio.call('free_mem'))
+            print(rio.call('ping'))
+    """
+
+    _NUS_RX = '6E400002-B5A3-F393-E0A9-E50E24DCCA9E'
+    _NUS_TX = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E'
+    _SCAN_TIMEOUT = 10.0
+
+    def __init__(self, name='micro-ota', timeout=10):
+        import asyncio as _asyncio
+        self.name    = name
+        self.timeout = timeout
+        self._client = None
+        self._mtu    = 20
+        # id → (Event, [result, error])
+        self._pending  = {}
+        self._call_id  = 0
+        self._lock     = threading.Lock()
+        self._buf      = b''  # partial line buffer (notifications may split lines)
+
+        if sys.platform == 'win32':
+            self._loop = _asyncio.ProactorEventLoop()
+        else:
+            self._loop = _asyncio.new_event_loop()
+        self._thread = threading.Thread(
+            target=self._loop.run_forever, daemon=True, name='ble-rio-loop'
+        )
+        self._thread.start()
+
+    def connect(self):
+        import asyncio as _asyncio
+        fut = _asyncio.run_coroutine_threadsafe(self._async_connect(), self._loop)
+        fut.result(timeout=self._SCAN_TIMEOUT + self.timeout)
+
+    def close(self):
+        import asyncio as _asyncio
+        if self._client:
+            fut = _asyncio.run_coroutine_threadsafe(self._async_disconnect(), self._loop)
+            try:
+                fut.result(timeout=5)
+            except Exception:
+                pass
+            self._client = None
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(timeout=3)
+        # Unblock any pending call()
+        with self._lock:
+            for ev, slot in self._pending.values():
+                slot[1] = 'connection closed'
+                ev.set()
+
+    def __enter__(self):
+        self.connect()
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+    def call(self, name, timeout=None, **kwargs):
+        """Invoke a named RemoteIO handler on the device and return the result."""
+        import asyncio as _asyncio
+        timeout = timeout if timeout is not None else self.timeout
+        ev   = threading.Event()
+        slot = [None, None]
+        with self._lock:
+            self._call_id += 1
+            mid = self._call_id
+            self._pending[mid] = (ev, slot)
+        msg = (json.dumps({'t': 'call', 'id': mid, 'name': name, 'args': kwargs})
+               + '\n').encode()
+        fut = _asyncio.run_coroutine_threadsafe(self._write_nus(msg), self._loop)
+        fut.result(timeout=5)
+        if not ev.wait(timeout=timeout):
+            with self._lock:
+                self._pending.pop(mid, None)
+            raise TimeoutError('BLE RemoteIO call "%s" timed out' % name)
+        with self._lock:
+            self._pending.pop(mid, None)
+        if slot[1] is not None:
+            raise RuntimeError(slot[1])
+        return slot[0]
+
+    # ── async internals ───────────────────────────────────────────────────────
+
+    async def _async_connect(self):
+        from bleak import BleakScanner, BleakClient
+        device = await BleakScanner.find_device_by_name(
+            self.name, timeout=self._SCAN_TIMEOUT
+        )
+        if device is None:
+            raise TimeoutError('BLE device "%s" not found' % self.name)
+        self._client = BleakClient(device)
+        await self._client.connect()
+        try:
+            backend = getattr(self._client, '_backend', self._client)
+            if hasattr(backend, '_acquire_mtu'):
+                await backend._acquire_mtu()
+            mtu = self._client.mtu_size
+            if mtu:
+                self._mtu = max(20, mtu - 3)
+        except Exception:
+            pass
+        await self._client.start_notify(self._NUS_TX, self._on_notify)
+
+    async def _async_disconnect(self):
+        try:
+            await self._client.disconnect()
+        except Exception:
+            pass
+
+    async def _write_nus(self, data):
+        view, offset = memoryview(data), 0
+        while offset < len(data):
+            end = min(offset + self._mtu, len(data))
+            await self._client.write_gatt_char(
+                self._NUS_RX, bytes(view[offset:end]), response=False
+            )
+            offset = end
+
+    def _on_notify(self, _handle, data: bytearray):
+        # 0x06 = flow-control ACK from device — ignore
+        if len(data) == 1 and data[0] == 0x06:
+            return
+        raw = self._buf + bytes(data)
+        lines = raw.split(b'\n')
+        self._buf = lines[-1]          # keep incomplete trailing fragment
+        for line in lines[:-1]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except Exception:
+                continue
+            t = msg.get('t')
+            if t == 'print':
+                sys.stdout.write(msg.get('d', ''))
+            elif t in ('resp', 'err'):
+                mid = msg.get('id')
+                with self._lock:
+                    entry = self._pending.get(mid)
+                if entry:
+                    ev, slot = entry
+                    if t == 'resp':
+                        slot[0] = msg.get('r')
+                    else:
+                        slot[1] = msg.get('e', 'unknown error')
+                    ev.set()
+
+
 class RemoteIOClient:
     DEFAULT_PORT = 2019
 

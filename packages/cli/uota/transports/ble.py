@@ -169,8 +169,28 @@ class BLETransport:
             )
 
         print('[BLE] Found %s (%s), connecting …' % (self._name, device.address))
-        self._client = BleakClient(device)
-        await self._client.connect()
+        # Retry on transient BlueZ 'br-connection-canceled' which happens when
+        # the adapter hasn't finished processing a previous disconnect yet.
+        last_exc = None
+        for attempt in range(3):
+            client = BleakClient(device)
+            try:
+                await client.connect()
+                last_exc = None
+                break
+            except Exception as e:
+                last_exc = e
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+                if 'br-connection-canceled' in str(e) and attempt < 2:
+                    await asyncio.sleep(2)
+                    continue
+                raise
+        if last_exc is not None:
+            raise last_exc
+        self._client = client
 
         # Negotiate larger MTU. On Linux/BlueZ, BleakClient wraps a backend
         # that exposes _acquire_mtu(); calling it issues an AcquireWrite DBus

@@ -65,17 +65,17 @@ class _BLEConn:
             self._rx_received -= _WINDOW
 
     def recv(self, n):
+        # Wait for at least 1 byte (like TCP recv: return what's available up to n).
+        # Callers that need exactly n bytes (e.g. _read_exact) loop themselves.
         deadline = time.ticks_add(time.ticks_ms(), 30_000)
-        while len(self._buf) < n:
+        while len(self._buf) == 0:
             if self._closed:
-                if self._buf:
-                    break
-                raise EOFError
+                return b''   # EOF — empty bytes signals end-of-stream
             if time.ticks_diff(deadline, time.ticks_ms()) <= 0:
                 raise OSError('BLE recv timeout')
             time.sleep_ms(5)
         chunk = bytes(self._buf[:n])
-        self._buf[:n] = b''
+        self._buf = self._buf[len(chunk):]
         return chunk
 
     def sendall(self, data):
@@ -238,9 +238,10 @@ class BLETransport:
             conn_handle, _, _ = data
             ota = _BLEConn(self._ble, conn_handle, self._ota_tx_h, self._mtu)
             nus = _BLEConn(self._ble, conn_handle, self._nus_tx_h, self._mtu)
-            self._conn        = (ota, nus)
-            self._ota_pending = ota
-            self._nus_pending = nus
+            self._conn = (ota, nus)
+            # Pending is set on first write to each characteristic, not on
+            # connect, so the event loop can route OTA vs NUS RemoteIO based
+            # on which service the central actually uses.
             print('[BLE] Client connected')
 
         elif event == _IRQ_DISCONNECT:
@@ -261,8 +262,12 @@ class BLETransport:
                 payload = self._ble.gatts_read(attr_handle)
                 if attr_handle == self._ota_rx_h:
                     ota._push(payload)
+                    if self._ota_pending is None:
+                        self._ota_pending = ota
                 elif attr_handle == self._nus_rx_h:
                     nus._push(payload)
+                    if self._nus_pending is None:
+                        self._nus_pending = nus
 
         elif event == _IRQ_MTU:
             conn_handle, mtu = data

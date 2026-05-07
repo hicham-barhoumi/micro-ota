@@ -380,7 +380,9 @@ def send_stream_ota(transport, files, manifest, key='', wipe=False, password='')
 
         resp    = transport.read_line().strip()
         elapsed = time.time() - start
-        if resp == 'ok':
+        if resp in ('ok', ''):
+            # '' = connection closed by device immediately after 'ok' + reset;
+            # TCP can deliver the FIN before the data in rare packet-loss cases.
             print('Done in {:.1f}s'.format(elapsed))
         elif resp == 'sig_mismatch':
             print('ERROR: HMAC signature mismatch -- update rejected')

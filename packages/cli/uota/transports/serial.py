@@ -274,12 +274,27 @@ class SerialOTATransport:
         time.sleep(0.1)
         self._ser.reset_input_buffer()
 
-        # Enter raw REPL
-        self._ser.write(b'\x01')       # Ctrl+A: enter raw REPL
-        self._ser.flush()
-        time.sleep(0.2)
-        banner = self._ser.read(self._ser.in_waiting or 1)
-        if b'raw REPL' not in banner:
+        # Enter raw REPL — retry up to 3 times to handle device mid-reboot.
+        # close() sends machine.reset(), so a subsequent connect() might arrive
+        # while the banner is still printing. Wait and retry in that case.
+        banner = b''
+        for _attempt in range(3):
+            self._ser.write(b'\x01')   # Ctrl+A: enter raw REPL
+            self._ser.flush()
+            time.sleep(0.2)
+            banner = self._ser.read(self._ser.in_waiting or 1)
+            if b'raw REPL' in banner:
+                break
+            if _attempt < 2:
+                time.sleep(3)          # wait for device to finish booting
+                self._ser.write(b'\r\x03\x03')
+                self._ser.flush()
+                time.sleep(0.3)
+                self._ser.write(b'\x02')
+                self._ser.flush()
+                time.sleep(0.1)
+                self._ser.reset_input_buffer()
+        else:
             raise RuntimeError(
                 'Could not enter raw REPL. Got: ' + repr(banner) +
                 '\nCheck port/baud or press Reset on the device.'

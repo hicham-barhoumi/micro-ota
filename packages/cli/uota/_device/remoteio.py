@@ -99,17 +99,19 @@ class _RemoteStream:
             self._conn = None
 
     def write(self, data):
+        # Hold the lock for the entire send so _dispatch cannot interleave
+        # bytes onto the same socket from the event-loop thread.
         with self._lock:
             c = self._conn
-        if c is None:
-            return
-        try:
-            if isinstance(data, bytes):
-                data = data.decode('utf-8', 'replace')
-            msg = '{"t":"print","d":' + json.dumps(data) + '}\n'
-            c.sendall(msg.encode())
-        except Exception:
-            pass
+            if c is None:
+                return
+            try:
+                if isinstance(data, bytes):
+                    data = data.decode('utf-8', 'replace')
+                msg = '{"t":"print","d":' + json.dumps(data) + '}\n'
+                c.sendall(msg.encode())
+            except Exception:
+                pass
 
     def readinto(self, buf):
         return 0
@@ -173,10 +175,13 @@ def _dispatch(conn, msg):
             resp = {'t': 'resp', 'id': mid, 'r': handler(**args)}
         except Exception as e:
             resp = {'t': 'err', 'id': mid, 'e': str(e)}
-    try:
-        conn.sendall((json.dumps(resp) + '\n').encode())
-    except Exception:
-        pass
+    # Acquire the same lock as _RemoteStream.write() so that concurrent
+    # app-thread prints never interleave bytes with this response on the wire.
+    with _stream._lock:
+        try:
+            conn.sendall((json.dumps(resp) + '\n').encode())
+        except Exception:
+            pass
 
 
 # ── server entry point ────────────────────────────────────────────────────────

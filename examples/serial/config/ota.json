@@ -13,10 +13,21 @@
     ],
     "manifestUrl": "http://10.42.0.1:8080/manifest.json",
     "pullInterval": 60,
-    "fastOtaFiles": ["app/**", "main.py", "boot.py", "config/**"],
-    "fullOtaFiles": ["**"],
-    "excludedFiles": [
-        ".git/**", "*.zip", "dist/**"
+    "fastOtaFiles": [
+        "app/**",
+        "main.py",
+        "boot.py",
+        "config/**"
     ],
-    "mpyFiles": ["libp/**"]
+    "fullOtaFiles": [
+        "**"
+    ],
+    "excludedFiles": [
+        ".git/**",
+        "*.zip",
+        "dist/**"
+    ],
+    "mpyFiles": [
+        "libp/**"
+    ]
 }
