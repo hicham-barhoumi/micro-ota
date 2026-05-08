@@ -102,6 +102,15 @@ class RemoteIOBLEClient:
     def __exit__(self, *_):
         self.close()
 
+    def listen(self):
+        """Block and forward device print() output to stdout. Ctrl-C to stop."""
+        import time as _time
+        try:
+            while self._client is not None and self._thread.is_alive():
+                _time.sleep(0.1)
+        except KeyboardInterrupt:
+            pass
+
     def call(self, name, timeout=None, **kwargs):
         """Invoke a named RemoteIO handler on the device and return the result."""
         import asyncio as _asyncio

@@ -14,7 +14,7 @@ Commands:
   flash <firmware.bin> [--port PORT] [--baud BAUD] [--chip CHIP] [--erase]
   serve       [--host HOST] [--port PORT] [--version VER]
   bundle      [--out DIR] [--zip] [--version VER]
-  remoteio    listen | call <name> [key=val ...]
+  remoteio    listen | call <name> [key=val ...] [--transport wifi_tcp|ble] [--ble-name N]
 
 All connection params default to values in ota.json when not specified.
 """
@@ -73,6 +73,9 @@ def _friendly(exc, cfg=None):
         pass
 
     if isinstance(exc, (TimeoutError, socket.timeout)):
+        # BLE timeouts mention 'BLE' or 'not found' — don't format as WiFi errors
+        if any(kw in msg for kw in ('BLE', 'not found', 'scan timed out')):
+            return None
         host = cfg.get('hostname', '?') if cfg else '?'
         port = cfg.get('port', 2018) if cfg else '?'
         return ("Timed out connecting to {}:{}.\n"
@@ -882,12 +885,43 @@ def cmd_bundle(args, cfg):
 
 
 def cmd_remoteio(args, cfg):
-    """Delegate to the remoteio CLI."""
-    from .remoteio import main as remoteio_main
-    # Reconstruct argv so remoteio.main() sees it
-    argv = [args.subcmd] + (args.remoteio_args or [])
-    sys.argv = ['uota remoteio'] + argv
-    remoteio_main()
+    transport = args.transport
+    if transport is None:
+        transports = cfg.get('transports', ['wifi_tcp'])
+        transport = 'ble' if transports == ['ble'] else 'wifi_tcp'
+
+    if transport == 'ble':
+        from .remoteio import RemoteIOBLEClient, _parse_kwargs
+        ble_name = args.ble_name or cfg.get('bleName', 'micro-ota')
+        if args.subcmd == 'listen':
+            print('Connecting to "%s" via BLE NUS …' % ble_name)
+            with RemoteIOBLEClient(ble_name) as rio:
+                print('Connected. Streaming device output (Ctrl-C to stop).\n')
+                rio.listen()
+        else:  # call
+            if not args.handler:
+                print('call requires a handler name', file=sys.stderr)
+                sys.exit(1)
+            kwargs = _parse_kwargs(args.kwargs or [])
+            with RemoteIOBLEClient(ble_name) as rio:
+                result = rio.call(args.handler, **kwargs)
+            print(json.dumps(result, indent=2))
+    else:
+        from .remoteio import main as remoteio_main, _parse_kwargs
+        # Build argv for the TCP-only remoteio.main()
+        argv = [args.subcmd]
+        if args.subcmd == 'call':
+            if not args.handler:
+                print('call requires a handler name', file=sys.stderr)
+                sys.exit(1)
+            argv.append(args.handler)
+            argv += (args.kwargs or [])
+        if args.host:
+            argv.append(args.host)
+        if args.port:
+            argv.append(str(args.port))
+        sys.argv = ['uota remoteio'] + argv
+        remoteio_main()
 
 
 # -- CLI entry point -----------------------------------------------------------
@@ -993,7 +1027,16 @@ def main():
     # remoteio
     rio = sub.add_parser('remoteio', help='RemoteIO side-channel (listen / call)')
     rio.add_argument('subcmd', choices=['listen', 'call'], help='listen or call')
-    rio.add_argument('remoteio_args', nargs=argparse.REMAINDER)
+    rio.add_argument('handler', nargs='?', metavar='NAME',
+                     help='Handler name (call only)')
+    rio.add_argument('kwargs', nargs='*', metavar='key=val',
+                     help='Handler arguments as key=value pairs (call only)')
+    rio.add_argument('--transport', choices=['wifi_tcp', 'ble'], default=None,
+                     help='Transport (default: wifi_tcp, or ble when device is BLE-only)')
+    rio.add_argument('--ble-name', dest='ble_name', metavar='NAME',
+                     help='BLE advertisement name (overrides bleName in ota.json)')
+    rio.add_argument('--host', help='RemoteIO host (WiFi TCP only)')
+    rio.add_argument('--port', type=int, help='RemoteIO port (WiFi TCP only)')
 
     args = p.parse_args()
     cfg  = load_config()
