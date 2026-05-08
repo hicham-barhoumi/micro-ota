@@ -8,7 +8,6 @@
     "bleName": "micro-ota",
     "otaKey": "",
     "transports": [
-        "wifi_tcp",
         "ble"
     ],
     "manifestUrl": "http://10.42.0.1:8080/manifest.json",

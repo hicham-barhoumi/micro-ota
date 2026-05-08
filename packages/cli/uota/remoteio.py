@@ -105,6 +105,14 @@ class RemoteIOBLEClient:
     def listen(self):
         """Block and forward device print() output to stdout. Ctrl-C to stop."""
         import time as _time
+        # The device only activates dupterm (and starts forwarding print output)
+        # once it receives data on NUS RX.  Send a ping so _serve() is triggered
+        # immediately — without this the device never enters _serve() and prints
+        # are silently dropped for the entire listen session.
+        try:
+            self.call('ping', timeout=10)
+        except Exception:
+            pass
         try:
             while self._client is not None and self._thread.is_alive():
                 _time.sleep(0.1)
@@ -147,11 +155,8 @@ class RemoteIOBLEClient:
         self._client = BleakClient(device)
         await self._client.connect()
         try:
-            backend = getattr(self._client, '_backend', self._client)
-            if hasattr(backend, '_acquire_mtu'):
-                await backend._acquire_mtu()
             mtu = self._client.mtu_size
-            if mtu:
+            if mtu and mtu > 23:
                 self._mtu = max(20, mtu - 3)
         except Exception:
             pass
@@ -190,6 +195,7 @@ class RemoteIOBLEClient:
             t = msg.get('t')
             if t == 'print':
                 sys.stdout.write(msg.get('d', ''))
+                sys.stdout.flush()
             elif t in ('resp', 'err'):
                 mid = msg.get('id')
                 with self._lock:
@@ -320,6 +326,7 @@ class RemoteIOClient:
         if t == 'print':
             fn = self._on_print or sys.stdout.write
             fn(msg.get('d', ''))
+            sys.stdout.flush()
         elif t in ('resp', 'err'):
             mid = msg.get('id')
             with self._lock:

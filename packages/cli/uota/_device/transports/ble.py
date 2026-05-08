@@ -21,6 +21,7 @@ ota.json keys:
 """
 
 import time
+import _thread
 
 _F_WRITE    = 0x0008
 _F_WRITE_NR = 0x0004
@@ -53,6 +54,10 @@ class _BLEConn:
         self._buf         = bytearray()
         self._closed      = False
         self._rx_received = 0
+        # Outbound buffer: app-thread callers enqueue here; main thread drains
+        # via _flush() so all gatts_notify() calls stay on the main thread.
+        self._out_buf     = bytearray()
+        self._out_lock    = _thread.allocate_lock()
 
     def set_mtu(self, mtu):
         self._mtu = max(20, mtu - 3)
@@ -64,23 +69,13 @@ class _BLEConn:
             self._ble.gatts_notify(self._conn, self._tx, _ACK)
             self._rx_received -= _WINDOW
 
-    def recv(self, n):
-        # Wait for at least 1 byte (like TCP recv: return what's available up to n).
-        # Callers that need exactly n bytes (e.g. _read_exact) loop themselves.
-        deadline = time.ticks_add(time.ticks_ms(), 30_000)
-        while len(self._buf) == 0:
-            if self._closed:
-                return b''   # EOF — empty bytes signals end-of-stream
-            if time.ticks_diff(deadline, time.ticks_ms()) <= 0:
-                raise OSError('BLE recv timeout')
-            time.sleep_ms(5)
-        chunk = bytes(self._buf[:n])
-        self._buf = self._buf[len(chunk):]
-        return chunk
-
-    def sendall(self, data):
-        if isinstance(data, str):
-            data = data.encode('latin-1')
+    def _flush(self):
+        """Drain the outbound buffer via gatts_notify. Main thread only."""
+        with self._out_lock:
+            if not self._out_buf:
+                return
+            data = bytes(self._out_buf)
+            self._out_buf = bytearray()
         view = memoryview(data)
         offset = 0
         while offset < len(data):
@@ -90,7 +85,30 @@ class _BLEConn:
             if offset < len(data):
                 time.sleep_ms(10)
 
+    def recv(self, n):
+        # Wait for at least 1 byte (like TCP recv: return what's available up to n).
+        # No fixed timeout — _closed is set by _IRQ_CENTRAL_DISCONNECT so the
+        # loop always terminates when the host drops the BLE connection.
+        # While waiting we flush any outbound data queued by the app thread so
+        # that all gatts_notify() calls happen here, on the main thread.
+        while len(self._buf) == 0:
+            if self._closed:
+                return b''   # EOF — empty bytes signals end-of-stream
+            self._flush()
+            time.sleep_ms(5)
+        chunk = bytes(self._buf[:n])
+        self._buf = self._buf[len(chunk):]
+        return chunk
+
+    def sendall(self, data):
+        # Buffer the data; the main thread drains it in recv()'s spin-wait.
+        if isinstance(data, str):
+            data = data.encode('latin-1')
+        with self._out_lock:
+            self._out_buf.extend(data)
+
     def close(self):
+        self._flush()   # send any pending output before disconnecting
         self._closed = True
         try:
             self._ble.gap_disconnect(self._conn)

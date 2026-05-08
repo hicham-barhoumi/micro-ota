@@ -80,11 +80,17 @@ def _uptime():
 
 # ── dupterm print forwarder ───────────────────────────────────────────────────
 
-class _RemoteStream:
+import uio as _uio
+
+
+class _RemoteStream(_uio.IOBase):
     """
     os.dupterm-compatible stream.  Writes are forwarded as {"t":"print"} JSON
     messages over the current active connection.
     Reads always return 0 (we don't forward stdin from the host here).
+
+    Must inherit from uio.IOBase so MicroPython registers the C-level stream
+    interface that os.dupterm requires.
     """
     def __init__(self):
         self._conn = None
@@ -99,31 +105,32 @@ class _RemoteStream:
             self._conn = None
 
     def write(self, data):
-        # Hold the lock for the entire send so _dispatch cannot interleave
-        # bytes onto the same socket from the event-loop thread.
         with self._lock:
             c = self._conn
             if c is None:
-                return
+                return len(data)
             try:
-                if isinstance(data, bytes):
-                    data = data.decode('utf-8', 'replace')
-                msg = '{"t":"print","d":' + json.dumps(data) + '}\n'
+                if isinstance(data, (bytes, bytearray, memoryview)):
+                    text = bytes(data).decode('utf-8', 'replace')
+                else:
+                    text = str(data)
+                msg = '{"t":"print","d":' + json.dumps(text) + '}\n'
                 c.sendall(msg.encode())
             except Exception:
                 pass
+        return len(data)
 
     def readinto(self, buf):
-        return 0
+        return None  # non-blocking: no input forwarded
 
 
 _stream = _RemoteStream()
 
 
 def _dupterm_set(stream):
-    """Enable/disable secondary dupterm (index 1).  Silently skips if unsupported."""
+    """Enable/disable dupterm at index 0 to forward print() output."""
     try:
-        os.dupterm(stream, 1)
+        os.dupterm(stream, 0)
     except Exception:
         pass
 
