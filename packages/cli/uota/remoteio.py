@@ -146,6 +146,8 @@ class RemoteIOBLEClient:
     # ── async internals ───────────────────────────────────────────────────────
 
     async def _async_connect(self):
+        import warnings
+        warnings.filterwarnings('ignore', message='.*MTU.*', category=UserWarning)
         from bleak import BleakScanner, BleakClient
         device = await BleakScanner.find_device_by_name(
             self.name, timeout=self._SCAN_TIMEOUT
