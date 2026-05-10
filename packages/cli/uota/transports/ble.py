@@ -139,10 +139,18 @@ class BLETransport:
         """Send raw bytes to the device RX characteristic."""
         if isinstance(data, str):
             data = data.encode()
+        # Outer timeout: n_ack_waits × 5s (per-ACK inner timeout) + self._timeout margin.
+        # This ensures the outer timeout never fires before the inner ACK timeouts can
+        # raise a descriptive error.
+        n_acks = max(1, (len(data) + _WINDOW - 1) // _WINDOW)
+        outer_timeout = n_acks * 5.0 + self._timeout
         future = asyncio.run_coroutine_threadsafe(
             self._write_chunks(data), self._loop
         )
-        future.result(timeout=self._timeout)
+        try:
+            future.result(timeout=outer_timeout)
+        except TimeoutError:
+            raise TimeoutError('BLE write timed out after %.0fs' % outer_timeout) from None
 
     def write_line(self, line):
         self.write(line if line.endswith('\n') else line + '\n')
@@ -230,7 +238,10 @@ class BLETransport:
             # Wait for device credit before sending the next window.
             # Skip the wait on the last bytes — no more data to gate.
             if window_sent >= _WINDOW and offset < len(data):
-                await asyncio.wait_for(self._ack_sem.acquire(), timeout=5.0)
+                try:
+                    await asyncio.wait_for(self._ack_sem.acquire(), timeout=5.0)
+                except (asyncio.TimeoutError, TimeoutError):
+                    raise TimeoutError('BLE ACK timeout — device stopped responding') from None
                 window_sent = 0
 
     def _on_notify(self, _handle, data: bytearray):

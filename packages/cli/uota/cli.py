@@ -73,9 +73,9 @@ def _friendly(exc, cfg=None):
         pass
 
     if isinstance(exc, (TimeoutError, socket.timeout)):
-        # BLE timeouts mention 'BLE' or 'not found' — don't format as WiFi errors
+        # BLE timeouts mention 'BLE' or 'not found' — format as BLE errors, not WiFi
         if any(kw in msg for kw in ('BLE', 'not found', 'scan timed out')):
-            return None
+            return msg or 'BLE operation timed out. Is the device powered on and advertising?'
         host = cfg.get('hostname', '?') if cfg else '?'
         port = cfg.get('port', 2018) if cfg else '?'
         return ("Timed out connecting to {}:{}.\n"
