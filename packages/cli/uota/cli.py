@@ -565,7 +565,6 @@ def _compile_files_mpy(files, mpy_version, mpy_patterns, tmp_dir):
             )
             if r.returncode == 0 and mpy_out.exists():
                 new_files[mpy_rel] = str(mpy_out)
-                new_files[rel] = abs_p  # keep .py so device has a valid fallback
                 count += 1
                 continue
             err = r.stderr.decode(errors='replace').strip()
