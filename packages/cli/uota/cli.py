@@ -939,8 +939,11 @@ def _wifi_scan(ota_port, scan_timeout):
     return sorted(found)
 
 
+_OTA_SERVICE_UUID = '756f7461-b5a3-f393-e0a9-e50e24dcca9e'
+
+
 def _ble_scan(scan_timeout):
-    """Discover nearby BLE devices. Returns list of (name, address) tuples."""
+    """Discover micro-ota devices by OTA service UUID. Returns list of (name, address)."""
     import asyncio
     try:
         from bleak import BleakScanner
@@ -951,17 +954,20 @@ def _ble_scan(scan_timeout):
     print('BLE scan ({:.0f}s) …'.format(scan_timeout))
 
     async def _run():
-        return await BleakScanner.discover(timeout=scan_timeout)
+        found = []
+        async with BleakScanner(service_uuids=[_OTA_SERVICE_UUID]) as scanner:
+            await asyncio.sleep(scan_timeout)
+            for d in scanner.discovered_devices:
+                found.append((d.name or d.address, d.address))
+        return found
 
-    devices = asyncio.run(_run())
-    return [(d.name or '', d.address) for d in devices if d.name]
+    return asyncio.run(_run())
 
 
 def cmd_list(args, cfg):
     transport = getattr(args, 'transport', None)
     ota_port  = getattr(args, 'port', None) or cfg.get('port', 2018)
     timeout   = getattr(args, 'timeout', 5.0)
-    ble_hint  = cfg.get('bleName', 'micro-ota')
 
     if transport in (None, 'wifi_tcp'):
         ips = _wifi_scan(ota_port, timeout)
@@ -980,8 +986,7 @@ def cmd_list(args, cfg):
         devices = _ble_scan(timeout)
         if devices:
             for name, addr in sorted(devices):
-                marker = ' *' if ble_hint.lower() in name.lower() else ''
-                print('  BLE   {}  {}{}'.format(addr, name, marker))
+                print('  BLE   {}  {}'.format(addr, name))
         else:
             print('  BLE   (none found)')
 
