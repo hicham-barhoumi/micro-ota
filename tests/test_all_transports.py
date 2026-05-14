@@ -125,18 +125,53 @@ def wait_for_wifi(timeout=45):
     return False
 
 
+def wait_for_wifi_reboot(timeout=50):
+    """Wait for device to go DOWN then come back UP on WiFi (post-OTA reboot).
+
+    After OTA the device may still be up briefly before rebooting.
+    Returning True on a stale 'still up' reading causes the next test
+    to run while the device is mid-reboot.  This function explicitly
+    waits for the port to disappear first, then for it to reappear.
+    """
+    deadline = time.time() + timeout
+    # Brief sleep so the device has time to start rebooting
+    time.sleep(2)
+    # Wait for the port to go DOWN
+    while time.time() < deadline:
+        try:
+            s = socket.create_connection((WIFI_HOST, WIFI_PORT), timeout=1)
+            s.close()
+            time.sleep(0.5)   # still up — keep waiting
+        except OSError:
+            break             # port is down — device is rebooting
+    # Wait for the port to come back UP
+    while time.time() < deadline:
+        try:
+            s = socket.create_connection((WIFI_HOST, WIFI_PORT), timeout=2)
+            s.close()
+            return True
+        except OSError:
+            time.sleep(1)
+    return False
+
+
 def _reset_ble_adapter():
     """Reset the BlueZ adapter to clear stale state from many BLE operations."""
     import subprocess as _sp
     try:
-        _sp.run(['sudo', '-S', 'hciconfig', 'hci0', 'down'],
-                input=b'hicham\n', capture_output=True, timeout=5)
-        time.sleep(0.5)
-        _sp.run(['sudo', '-S', 'hciconfig', 'hci0', 'up'],
-                input=b'hicham\n', capture_output=True, timeout=5)
-        time.sleep(1.0)
+        _sp.run(['sudo', '-S', 'systemctl', 'restart', 'bluetooth'],
+                input=b'hicham\n', capture_output=True, timeout=15)
+        time.sleep(4.0)
     except Exception:
-        pass
+        try:
+            _sp.run(['sudo', '-S', 'hciconfig', 'hci0', 'down'],
+                    input=b'hicham\n', capture_output=True, timeout=5)
+            time.sleep(1.0)
+            _sp.run(['sudo', '-S', 'hciconfig', 'hci0', 'up'],
+                    input=b'hicham\n', capture_output=True, timeout=5)
+            time.sleep(3.0)
+        except Exception:
+            pass
 
 
 def wait_for_ble(timeout=30):
@@ -159,9 +194,9 @@ def wait_for_ble(timeout=30):
             except Exception:
                 pass
             _scan_fail_count += 1
-            # After the first scan failure, reset the BlueZ adapter —
+            # After each odd failure reset the BlueZ adapter —
             # many BLE connect/disconnect cycles can leave it unresponsive.
-            if _scan_fail_count == 1:
+            if _scan_fail_count % 2 == 1:
                 _reset_ble_adapter()
         time.sleep(3)
     return False
@@ -621,10 +656,18 @@ def phase_wifi():
         return WiFiTCPTransport(WIFI_HOST, WIFI_PORT, timeout=10)
 
     run_protocol_tests('WiFi TCP', wifi_factory)
-    # Pass WIFI_HOST so uota doesn't try to resolve 'micro-ota.local'
-    run_ota_push_tests('WiFi TCP', 'wifi_tcp', wifi_factory,
-                       lambda timeout=45: wait_for_wifi(timeout),
-                       host_arg=WIFI_HOST)
+    # Temporarily set transports to wifi_tcp so OTA pushes don't switch device to BLE
+    _orig_wifi_cfg = _read_ota_json()
+    _wifi_only_cfg = dict(_orig_wifi_cfg)
+    _wifi_only_cfg['transports'] = ['wifi_tcp']
+    _write_ota_json(_wifi_only_cfg)
+    try:
+        # Pass WIFI_HOST so uota doesn't try to resolve 'micro-ota.local'
+        run_ota_push_tests('WiFi TCP', 'wifi_tcp', wifi_factory,
+                           lambda timeout=45: wait_for_wifi(timeout),
+                           host_arg=WIFI_HOST)
+    finally:
+        _write_ota_json(_orig_wifi_cfg)
 
     print('\n── WiFi TCP RemoteIO ────────────────────────────────────────────────')
 

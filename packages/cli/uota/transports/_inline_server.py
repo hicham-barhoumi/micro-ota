@@ -276,7 +276,7 @@ def handle_ota(conn):
 
             if cmd == b'manifest':
                 manifest = json.loads(read_exact(conn, int(arg)))
-                if not verify_sig(manifest, config.get('otaKey', '')):
+                if not verify_sig(manifest, config.get('signingKey', '')):
                     remove_tree(STAGE_DIR)
                     send(conn, 'sig_mismatch\n')
                     return
@@ -319,7 +319,7 @@ def handle_ota(conn):
 
 def handle_stream_ota(conn):
     send(conn, 'ready\n')
-    ota_key = config.get('otaKey', '')
+    ota_key = config.get('signingKey', '')
     hmac    = HmacState(ota_key) if ota_key else None
 
     def read_uint(n_bytes):

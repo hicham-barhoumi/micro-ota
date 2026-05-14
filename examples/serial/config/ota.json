@@ -5,12 +5,12 @@
     "remoteioPort": 2019,
     "ssid": "YOUR_WIFI_SSID",
     "password": "YOUR_WIFI_PASSWORD",
-    "otaKey": "",
+    "signingKey": "",
     "bleName": "micro-ota",
     "otaPassword": "",
-    "serialPort": "",
+    "serialPort": "/dev/ttyUSB1",
     "transports": [
-        "wifi_tcp"
+        "ble"
     ],
     "manifestUrl": "",
     "pullInterval": 60,
@@ -28,6 +28,6 @@
         "dist/**"
     ],
     "mpyFiles": [
-        "**"
+        "lib/**"
     ]
 }

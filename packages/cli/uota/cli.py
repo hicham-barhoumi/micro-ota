@@ -132,11 +132,20 @@ def _friendly(exc, cfg=None):
 # -- config --------------------------------------------------------------------
 
 def load_config(path='config/ota.json'):
+    cfg = {}
     try:
         with open(path) as f:
-            return json.load(f)
+            cfg = json.load(f)
     except FileNotFoundError:
-        return {}
+        pass
+    secrets_dir = os.path.dirname(path) or '.'
+    secrets_path = os.path.join(secrets_dir, '.ota.secrets.json')
+    try:
+        with open(secrets_path) as f:
+            cfg.update(json.load(f))
+    except FileNotFoundError:
+        pass
+    return cfg
 
 
 # -- transport factory ---------------------------------------------------------
@@ -676,16 +685,39 @@ def cmd_init(args, cfg):
         boot_py.write_text(_BOOT_PY)
         print('[init] {}boot.py'.format('Overwrote ' if boot_py.exists() and force else 'Created '))
 
+    # 6. Create .ota.secrets.json (gitignored) for sensitive keys
+    secrets_file = target / 'config' / '.ota.secrets.json'
+    if not secrets_file.exists():
+        secrets_file.write_text('{\n    "otaPassword": "",\n    "signingKey":  ""\n}\n')
+        print('[init] Created config/.ota.secrets.json (keep this out of git)')
+
+    # 7. Add .ota.secrets.json to .gitignore
+    gitignore = target / '.gitignore'
+    entry = 'config/.ota.secrets.json\n'
+    existing = gitignore.read_text() if gitignore.exists() else ''
+    if 'ota.secrets' not in existing:
+        with open(gitignore, 'a') as f:
+            f.write(('\n' if existing and not existing.endswith('\n') else '') + entry)
+        print('[init] Added config/.ota.secrets.json to .gitignore')
+
     print('\nProject layout:')
-    print('  app/           ← application code       (fast + full OTA)')
-    print('  config/ota.json← OTA + app config        (fast + full OTA, always in sync)')
-    print('  data/          ← runtime data on device  (never touched by OTA or wipe)')
-    print('  lib/uota/      ← OTA system files        (managed by bootstrap)')
+    print('  app/                       ← application code       (fast + full OTA)')
+    print('  config/ota.json            ← OTA + app config        (committed, synced via OTA)')
+    print('  config/.ota.secrets.json   ← passwords + signing key (gitignored, local only)')
+    print('  lib/uota/                  ← OTA system files        (managed by bootstrap)')
     print('\nNext steps:')
-    print('  1. Edit config/ota.json -- fill in ssid, password, hostname')
-    print('  2. Connect your ESP32 via USB')
-    print('  3. Run: uota bootstrap   (first-time device setup)')
-    print('  4. Run: uota fast        (push app/ + config/ updates)')
+    print('  1. Edit config/ota.json -- fill in ssid, hostname, transports')
+    print('  2. Edit config/.ota.secrets.json -- set otaPassword and signingKey')
+    print('  3. Connect your ESP32 via USB')
+    print('  4. Run: uota bootstrap   (first-time device setup)')
+    print('  5. Run: uota fast        (push app/ + config/ updates)')
+
+
+def cmd_passwd(args, cfg):
+    """Print the SHA256 hash of a password for use as otaPassword on the device."""
+    import hashlib
+    pw = args.password
+    print(hashlib.sha256(pw.encode()).hexdigest())
 
 
 def cmd_info(args, cfg):
@@ -737,10 +769,10 @@ def cmd_bootstrap(args, cfg):
 
 def _ota_prepare(cfg, args, patterns, excludes):
     """Build manifest and compile mpy files once. Returns (files, manifest, tmp_dir, key)."""
-    import shutil, tempfile
+    import shutil, tempfile, hashlib
     version  = getattr(args, 'version', None) or cfg.get('version', 'unknown')
     manifest = build_manifest(patterns, excludes, version)
-    key      = cfg.get('otaKey', '')
+    key      = cfg.get('signingKey', '')
     files    = {p: p for p in manifest['files']}
 
     tmp_dir = None
@@ -758,6 +790,28 @@ def _ota_prepare(cfg, args, patterns, excludes):
                 import shutil as _sh
                 _sh.rmtree(tmp_dir, ignore_errors=True)
                 tmp_dir = None
+
+    # Transform config/ota.json before pushing to device:
+    #   - inject signingKey (device needs it for HMAC verification)
+    #   - replace plaintext otaPassword with SHA256 hash (device verifies by hashing)
+    cfg_rel = 'config/ota.json'
+    if cfg_rel in files:
+        plaintext_pw = cfg.get('otaPassword', '')
+        if key or plaintext_pw:
+            if tmp_dir is None:
+                tmp_dir = tempfile.mkdtemp()
+            with open(files[cfg_rel]) as f:
+                device_cfg = json.load(f)
+            device_cfg['signingKey'] = key
+            if plaintext_pw:
+                device_cfg['otaPassword'] = hashlib.sha256(
+                    plaintext_pw.encode()).hexdigest()
+            os.makedirs(os.path.join(tmp_dir, 'config'), exist_ok=True)
+            tmp_cfg = os.path.join(tmp_dir, 'config', 'ota.json')
+            with open(tmp_cfg, 'w') as f:
+                json.dump(device_cfg, f, indent=4)
+            files[cfg_rel] = tmp_cfg
+            manifest = _manifest_from_dict(files, version)
 
     return files, manifest, tmp_dir, key
 
@@ -1222,6 +1276,10 @@ def main():
     li.add_argument('--timeout', type=float, default=5.0,
                     help='Scan duration in seconds (default: 5)')
 
+    # passwd
+    pa = sub.add_parser('passwd', help='Print SHA256 hash of a password for device config')
+    pa.add_argument('password', help='Plaintext password to hash')
+
     # remoteio
     rio = sub.add_parser('remoteio', help='RemoteIO side-channel (listen / call)')
     rio.add_argument('subcmd', choices=['listen', 'call'], help='listen or call')
@@ -1253,6 +1311,7 @@ def main():
         'bundle':    cmd_bundle,
         'remoteio':  cmd_remoteio,
         'list':      cmd_list,
+        'passwd':    cmd_passwd,
     }
 
     try:

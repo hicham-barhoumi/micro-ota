@@ -192,13 +192,17 @@ def _walk_stage():
 
 def _authenticate(conn, cfg):
     """Password handshake — only active when otaPassword is set in config.
+    Device stores SHA256(password) hex; CLI sends plaintext; device hashes and compares.
     Returns True if auth passes or is not required, False if denied.
     """
-    pw = cfg.get('otaPassword', '')
-    if not pw:
+    pw_hash = cfg.get('otaPassword', '')
+    if not pw_hash:
         return True   # no password configured — skip handshake entirely
     received = _read_line(conn)
-    if received == pw.encode():
+    import uhashlib, ubinascii
+    got = uhashlib.sha256(received).digest()
+    expected = ubinascii.unhexlify(pw_hash)
+    if got == expected:
         _send(conn, 'ok\n')
         return True
     _send(conn, 'denied\n')
@@ -238,7 +242,7 @@ def _handle_ota(conn, cfg):
             if cmd == b'manifest':
                 data = _read_exact(conn, int(arg))
                 new_manifest = json.loads(data)
-                key = cfg.get('otaKey', '')
+                key = cfg.get('signingKey', '')
                 if not _verify_manifest_sig(new_manifest, key):
                     print('[OTA] Manifest signature invalid — rejecting')
                     _send(conn, 'sig_mismatch\n')
@@ -360,7 +364,7 @@ def _handle_stream_ota(conn, cfg):
         _send(conn, 'error: bad magic\n')
         return
 
-    key = cfg.get('otaKey', '')
+    key = cfg.get('signingKey', '')
     hm  = _HMACStream(key) if key else None
 
     def _ru16():

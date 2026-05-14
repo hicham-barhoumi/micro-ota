@@ -5,7 +5,7 @@
     "remoteioPort": 2019,
     "ssid":         "",
     "password":     "",
-    "otaKey":       "",
+    "signingKey":   "",
     "bleName":      "micro-ota",
     "otaPassword":  "",
     "serialPort":   "",

@@ -5,7 +5,7 @@
     "remoteioPort": 2019,
     "ssid": "YOUR_WIFI_SSID",
     "password": "YOUR_WIFI_PASSWORD",
-    "otaKey": "",
+    "signingKey": "",
     "bleName": "micro-ota",
     "serialPort": "",
     "transports": ["wifi_tcp"],

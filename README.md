@@ -87,7 +87,7 @@ After `uota bootstrap`, the device looks like this:
 /app/
     app.py                     ← your application
 /config/
-    ota.json                   ← config (ssid, hostname, otaKey …) — synced via OTA
+    ota.json                   ← config (ssid, hostname, signingKey …) — synced via OTA
 /data/                         ← runtime data, never wiped by OTA
 /lib/
     uota/
@@ -323,17 +323,43 @@ uota full --all --transport ble    # full push to all BLE devices
 
 ---
 
-## Security — HMAC-SHA256 manifest signing
+## Security
 
-Set a shared secret in `config/ota.json` on both the host and the device:
+### Local secrets file
+
+Sensitive values (`otaPassword`, `signingKey`) live in `config/.ota.secrets.json`, which is gitignored and never pushed to the device. `config/ota.json` holds only non-sensitive config and can be committed safely.
 
 ```json
-{ "otaKey": "your-secret-key" }
+// config/.ota.secrets.json  (gitignored)
+{
+    "otaPassword": "my-plaintext-password",
+    "signingKey":  "my-hmac-secret"
+}
+```
+
+The CLI merges this file over `ota.json` at startup. When pushing `config/ota.json` to the device, it automatically injects `signingKey` and replaces `otaPassword` with its SHA256 hash — the device never receives the plaintext password or learns the password from its config.
+
+### OTA password
+
+The device stores `SHA256(password)` as a hex string in `otaPassword`. The CLI sends the plaintext; the device hashes it and compares. To compute the hash for a new password:
+
+```
+uota passwd my-plaintext-password
+```
+
+Paste the output into `config/ota.json` as `"otaPassword"`. Keep the plaintext in `config/.ota.secrets.json`.
+
+### HMAC-SHA256 manifest signing
+
+Set `signingKey` in `config/.ota.secrets.json`:
+
+```json
+{ "signingKey": "your-secret-key" }
 ```
 
 The host signs every manifest with HMAC-SHA256 before sending it. The device verifies the signature and aborts with `sig_mismatch` if it is missing or incorrect — before any file is transferred.
 
-Leave `otaKey` empty (the default) to disable signing.
+Leave `signingKey` empty (the default) to disable signing.
 
 **Signing payload** (deterministic, order-independent):
 
@@ -477,7 +503,7 @@ Location: `config/ota.json` in your project (device path: `/config/ota.json`).
     "remoteioPort": 2019,
     "ssid":         "MyWiFi",
     "password":     "MyPassword",
-    "otaKey":       "",
+    "signingKey":   "",
     "bleName":      "micro-ota",
     "transports":   ["wifi_tcp"],
     "manifestUrl":  "",
@@ -496,7 +522,8 @@ Location: `config/ota.json` in your project (device path: `/config/ota.json`).
 | `port` | OTA server port (default `2018`) |
 | `remoteioPort` | RemoteIO server port (default `2019`) |
 | `ssid` / `password` | WiFi credentials (stored on device) |
-| `otaKey` | HMAC-SHA256 signing key — empty disables signing |
+| `otaPassword` | SHA256 hash of the OTA password — empty disables auth (set via `uota passwd`) |
+| `signingKey` | HMAC-SHA256 signing key — empty disables signing (keep in `.ota.secrets.json`) |
 | `bleName` | BLE advertisement name (max 20 chars) |
 | `transports` | Active transports on the device |
 | `manifestUrl` | HTTP pull manifest URL |
@@ -570,7 +597,7 @@ abort                                → aborted  (staging discarded)
 
 Files are staged in `/ota_stage/`. On `end_ota`: old files not in the new manifest are deleted (protected paths like `/lib`, `/config`, `/data` are never touched), staged files are moved atomically, version is written, device resets.
 
-If `otaKey` is set, the device verifies the manifest signature before accepting any files.
+If `signingKey` is set, the device verifies the manifest signature before accepting any files.
 
 ---
 
