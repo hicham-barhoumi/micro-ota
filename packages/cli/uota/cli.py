@@ -735,10 +735,10 @@ def cmd_bootstrap(args, cfg):
     )
 
 
-def _ota_push(cfg, args, patterns, excludes, wipe=False):
-    """Shared implementation for fast and full OTA pushes."""
+def _ota_prepare(cfg, args, patterns, excludes):
+    """Build manifest and compile mpy files once. Returns (files, manifest, tmp_dir, key)."""
     import shutil, tempfile
-    version  = args.version or cfg.get('version', 'unknown')
+    version  = getattr(args, 'version', None) or cfg.get('version', 'unknown')
     manifest = build_manifest(patterns, excludes, version)
     key      = cfg.get('otaKey', '')
     files    = {p: p for p in manifest['files']}
@@ -755,9 +755,17 @@ def _ota_push(cfg, args, patterns, excludes, wipe=False):
                 print('[mpy] {}/{} files compiled to .mpy (v{})'.format(
                     n, len(manifest['files']), mpy_version))
             else:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
+                import shutil as _sh
+                _sh.rmtree(tmp_dir, ignore_errors=True)
                 tmp_dir = None
 
+    return files, manifest, tmp_dir, key
+
+
+def _ota_push(cfg, args, patterns, excludes, wipe=False):
+    """Shared implementation for fast and full OTA pushes."""
+    import shutil
+    files, manifest, tmp_dir, key = _ota_prepare(cfg, args, patterns, excludes)
     password = getattr(args, 'password', None) or cfg.get('otaPassword', '')
     ble_name = getattr(args, 'ble_name', None)
     transport = get_transport(cfg, args.host, args.port, getattr(args, 'transport', None),
@@ -769,17 +777,78 @@ def _ota_push(cfg, args, patterns, excludes, wipe=False):
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def _ota_push_all(cfg, args, patterns, excludes, wipe=False):
+    """Scan for all reachable devices and push OTA to each one."""
+    import shutil
+
+    transport_filter = getattr(args, 'transport', None)
+    password = getattr(args, 'password', None) or cfg.get('otaPassword', '')
+    ota_port = cfg.get('port', 2018)
+    timeout  = 5.0
+
+    # --- discover targets -------------------------------------------------------
+    wifi_targets = []  # list of IP strings
+    ble_targets  = []  # list of (name, address) tuples
+
+    if transport_filter in (None, 'wifi_tcp'):
+        wifi_targets = _wifi_scan(ota_port, timeout)
+    if transport_filter in (None, 'ble'):
+        ble_targets = _ble_scan(timeout)
+
+    if not wifi_targets and not ble_targets:
+        print('No devices found.')
+        return
+
+    print('Targets: {} WiFi, {} BLE'.format(len(wifi_targets), len(ble_targets)))
+
+    # --- prepare files once -----------------------------------------------------
+    files, manifest, tmp_dir, key = _ota_prepare(cfg, args, patterns, excludes)
+
+    errors = []
+
+    try:
+        for ip in wifi_targets:
+            print('\n[WiFi {}]'.format(ip))
+            t = WiFiTCPTransport(ip, ota_port)
+            try:
+                send_stream_ota(t, files, manifest, key=key, wipe=wipe, password=password)
+            except Exception as e:
+                print('ERROR: {}'.format(e), file=sys.stderr)
+                errors.append((ip, e))
+
+        for name, addr in ble_targets:
+            print('\n[BLE {}]'.format(name))
+            from .transports.ble import BLETransport
+            t = BLETransport(addr)
+            try:
+                send_stream_ota(t, files, manifest, key=key, wipe=wipe, password=password)
+            except Exception as e:
+                print('ERROR: {}'.format(e), file=sys.stderr)
+                errors.append((name, e))
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    if errors:
+        sys.exit(1)
+
+
 def cmd_fast(args, cfg):
-    _ota_push(cfg, args,
-              patterns=cfg.get('fastOtaFiles', ['main.py']),
-              excludes=cfg.get('excludedFiles', []))
+    patterns = cfg.get('fastOtaFiles', ['main.py'])
+    excludes = cfg.get('excludedFiles', [])
+    if getattr(args, 'all', False):
+        _ota_push_all(cfg, args, patterns, excludes)
+    else:
+        _ota_push(cfg, args, patterns, excludes)
 
 
 def cmd_full(args, cfg):
-    _ota_push(cfg, args,
-              patterns=cfg.get('fastOtaFiles', []) + cfg.get('fullOtaFiles', []),
-              excludes=cfg.get('excludedFiles', []),
-              wipe=args.wipe)
+    patterns = cfg.get('fastOtaFiles', []) + cfg.get('fullOtaFiles', [])
+    excludes = cfg.get('excludedFiles', [])
+    if getattr(args, 'all', False):
+        _ota_push_all(cfg, args, patterns, excludes, wipe=args.wipe)
+    else:
+        _ota_push(cfg, args, patterns, excludes, wipe=args.wipe)
 
 
 def cmd_terminal(args, cfg):
@@ -1074,6 +1143,8 @@ def main():
     fa.add_argument('--host')
     fa.add_argument('--port',      type=int)
     fa.add_argument('--version')
+    fa.add_argument('--all',       action='store_true',
+                    help='Scan and push to all reachable devices (WiFi + BLE)')
     fa.add_argument('--transport', choices=['wifi_tcp', 'serial', 'ble'])
     fa.add_argument('--ble-name',  dest='ble_name', metavar='NAME',
                     help='BLE advertisement name (overrides bleName in ota.json)')
@@ -1086,6 +1157,8 @@ def main():
     fu.add_argument('--port', type=int)
     fu.add_argument('--version')
     fu.add_argument('--wipe', action='store_true')
+    fu.add_argument('--all',  action='store_true',
+                    help='Scan and push to all reachable devices (WiFi + BLE)')
     fu.add_argument('--transport', choices=['wifi_tcp', 'serial', 'ble'])
     fu.add_argument('--ble-name',  dest='ble_name', metavar='NAME',
                     help='BLE advertisement name (overrides bleName in ota.json)')
