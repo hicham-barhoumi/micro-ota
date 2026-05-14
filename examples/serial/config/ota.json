@@ -1,21 +1,22 @@
 {
     "version": "1.0.0",
-    "hostname": "micro-ota.local",
+    "hostname": "micropython.local",
     "port": 2018,
     "remoteioPort": 2019,
     "ssid": "YOUR_WIFI_SSID",
     "password": "YOUR_WIFI_PASSWORD",
-    "bleName": "micro-ota",
     "otaKey": "",
+    "bleName": "micro-ota",
+    "otaPassword": "",
+    "serialPort": "",
     "transports": [
-        "ble"
+        "wifi_tcp"
     ],
-    "manifestUrl": "http://10.42.0.1:8080/manifest.json",
+    "manifestUrl": "",
     "pullInterval": 60,
     "fastOtaFiles": [
         "app/**",
         "main.py",
-        "boot.py",
         "config/**"
     ],
     "fullOtaFiles": [
@@ -27,6 +28,6 @@
         "dist/**"
     ],
     "mpyFiles": [
-        "libp/**"
+        "**"
     ]
 }

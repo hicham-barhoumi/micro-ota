@@ -657,6 +657,15 @@ class OTAUpdater:
         _t = _cfg.get('transports', ['ble'])
         if any(x in _t for x in ('wifi_tcp', 'http_pull')):
             import network as _net
+            _h = _cfg.get('hostname', '')
+            if _h.endswith('.local'):
+                _h = _h[:-6]
+            if not _h or '.' in _h:
+                _h = _cfg.get('bleName', 'micropython')
+            try:
+                _net.hostname(_h)
+            except Exception:
+                pass
             _net.WLAN(_net.STA_IF).active(True)
 
     def _make_transports(self):
@@ -667,10 +676,15 @@ class OTAUpdater:
             try:
                 if name == 'wifi_tcp':
                     from transports.wifi_tcp import WiFiTCPTransport
+                    _h = cfg.get('hostname', '')
+                    if _h.endswith('.local'):
+                        _h = _h[:-6]
+                    if not _h or '.' in _h:  # empty or looks like an IP
+                        _h = cfg.get('bleName', 'micropython')
                     result.append(WiFiTCPTransport(
                         ssid=cfg.get('ssid', ''),
                         password=cfg.get('password', ''),
-                        hostname=cfg.get('hostname', 'micropython'),
+                        hostname=_h,
                         port=cfg.get('port', 2018),
                     ))
                 elif name == 'serial':

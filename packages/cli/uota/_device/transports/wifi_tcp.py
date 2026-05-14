@@ -59,8 +59,6 @@ class WiFiTCPTransport:
 
     def _connect_wifi(self):
         sta = network.WLAN(network.STA_IF)
-        if not sta.active():
-            sta.active(True)
         if sta.isconnected():
             print('[OTA] WiFi already connected:', sta.ifconfig()[0])
             return
@@ -68,9 +66,11 @@ class WiFiTCPTransport:
             raise OSError('No SSID configured and WiFi not connected')
         print('[OTA] Connecting to', self.ssid, '...')
         try:
-            sta.config(dhcp_hostname=self.hostname)
+            # Must be set before sta.active(True) for LWIP mDNS to advertise hostname.local
+            network.hostname(self.hostname)
         except Exception:
             pass
+        sta.active(True)
         sta.connect(self.ssid, self.password)
         deadline = time.time() + 20
         while not sta.isconnected():

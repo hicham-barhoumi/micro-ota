@@ -1,6 +1,6 @@
 {
     "version": "1.0.0",
-    "hostname": "192.168.1.100",
+    "hostname": "micro-ota",
     "port": 2018,
     "remoteioPort": 2019,
     "ssid": "YOUR_WIFI_SSID",
