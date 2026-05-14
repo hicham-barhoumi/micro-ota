@@ -164,13 +164,23 @@ class BLETransport:
 
     # ── async internals ───────────────────────────────────────────────────────
 
+    @staticmethod
+    def _is_mac(s):
+        import re
+        return bool(re.match(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', s))
+
     async def _connect(self):
         from bleak import BleakScanner, BleakClient
 
         print('[BLE] Scanning for "%s" …' % self._name)
-        device = await BleakScanner.find_device_by_name(
-            self._name, timeout=_SCAN_TIMEOUT
-        )
+        if self._is_mac(self._name):
+            device = await BleakScanner.find_device_by_address(
+                self._name, timeout=_SCAN_TIMEOUT
+            )
+        else:
+            device = await BleakScanner.find_device_by_name(
+                self._name, timeout=_SCAN_TIMEOUT
+            )
         if device is None:
             raise TimeoutError(
                 'Device "%s" not found. Is it powered on and advertising?' % self._name
