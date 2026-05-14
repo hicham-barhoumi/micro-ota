@@ -15,6 +15,7 @@ Commands:
   serve       [--host HOST] [--port PORT] [--version VER]
   bundle      [--out DIR] [--zip] [--version VER]
   remoteio    listen | call <name> [key=val ...] [--transport wifi_tcp|ble] [--ble-name N]
+  list        [--transport wifi_tcp|ble] [--port PORT] [--timeout SEC]
 
 All connection params default to values in ota.json when not specified.
 """
@@ -877,6 +878,114 @@ def cmd_serve(args, cfg):
     )
 
 
+def _get_local_subnets():
+    """Return [(local_ip_str, IPv4Network)] for every active non-loopback interface."""
+    import ipaddress, subprocess
+    subnets = []
+    try:
+        out = subprocess.check_output(
+            ['ip', '-4', 'addr', 'show'], text=True, stderr=subprocess.DEVNULL)
+        for line in out.splitlines():
+            s = line.strip()
+            if s.startswith('inet ') and 'scope' in s:
+                cidr = s.split()[1]
+                iface = ipaddress.IPv4Interface(cidr)
+                if not iface.ip.is_loopback:
+                    subnets.append((str(iface.ip), iface.network))
+    except Exception:
+        pass
+    return subnets
+
+
+def _wifi_scan(ota_port, scan_timeout):
+    """Probe every host in local /24 subnets for an open OTA port."""
+    import ipaddress
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    subnets = _get_local_subnets()
+    if not subnets:
+        print('WiFi: could not detect local subnets')
+        return []
+
+    probe_t = min(0.3, scan_timeout / 3)
+    found = []
+
+    for _local_ip, network in subnets:
+        # Limit to /24 or smaller to keep scan time reasonable
+        if network.prefixlen < 24:
+            network = ipaddress.IPv4Network(
+                str(network.network_address) + '/24', strict=False)
+        hosts = list(network.hosts())
+        print('WiFi scan {} ({} hosts, port {}) …'.format(
+            network, len(hosts), ota_port))
+
+        def _probe(ip, port=ota_port, t=probe_t):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(t)
+                s.connect((str(ip), port))
+                s.close()
+                return str(ip)
+            except Exception:
+                return None
+
+        with ThreadPoolExecutor(max_workers=64) as ex:
+            futs = {ex.submit(_probe, h): h for h in hosts}
+            for f in as_completed(futs, timeout=scan_timeout + 1):
+                ip = f.result()
+                if ip:
+                    found.append(ip)
+
+    return sorted(found)
+
+
+def _ble_scan(scan_timeout):
+    """Discover nearby BLE devices. Returns list of (name, address) tuples."""
+    import asyncio
+    try:
+        from bleak import BleakScanner
+    except ImportError:
+        print('BLE: bleak not installed — run: pip install bleak')
+        return []
+
+    print('BLE scan ({:.0f}s) …'.format(scan_timeout))
+
+    async def _run():
+        return await BleakScanner.discover(timeout=scan_timeout)
+
+    devices = asyncio.run(_run())
+    return [(d.name or '', d.address) for d in devices if d.name]
+
+
+def cmd_list(args, cfg):
+    transport = getattr(args, 'transport', None)
+    ota_port  = getattr(args, 'port', None) or cfg.get('port', 2018)
+    timeout   = getattr(args, 'timeout', 5.0)
+    ble_hint  = cfg.get('bleName', 'micro-ota')
+
+    if transport in (None, 'wifi_tcp'):
+        ips = _wifi_scan(ota_port, timeout)
+        if ips:
+            for ip in ips:
+                try:
+                    hostname = socket.gethostbyaddr(ip)[0]
+                except Exception:
+                    hostname = ''
+                suffix = ('  ' + hostname) if hostname else ''
+                print('  WiFi  {}{}'.format(ip, suffix))
+        else:
+            print('  WiFi  (none found)')
+
+    if transport in (None, 'ble'):
+        devices = _ble_scan(timeout)
+        if devices:
+            for name, addr in sorted(devices):
+                marker = ' *' if ble_hint.lower() in name.lower() else ''
+                print('  BLE   {}  {}{}'.format(addr, name, marker))
+        else:
+            print('  BLE   (none found)')
+
+
 def cmd_bundle(args, cfg):
     from .bundle import build
     build(
@@ -1026,6 +1135,15 @@ def main():
     bu.add_argument('--zip',     action='store_true')
     bu.add_argument('--version', default=None)
 
+    # list
+    li = sub.add_parser('list', help='Scan for micro-ota devices on WiFi or BLE')
+    li.add_argument('--transport', choices=['wifi_tcp', 'ble'], default=None,
+                    help='Scan only WiFi or BLE (default: both)')
+    li.add_argument('--port', type=int,
+                    help='OTA port to probe on WiFi (default: port in ota.json or 2018)')
+    li.add_argument('--timeout', type=float, default=5.0,
+                    help='Scan duration in seconds (default: 5)')
+
     # remoteio
     rio = sub.add_parser('remoteio', help='RemoteIO side-channel (listen / call)')
     rio.add_argument('subcmd', choices=['listen', 'call'], help='listen or call')
@@ -1056,6 +1174,7 @@ def main():
         'serve':     cmd_serve,
         'bundle':    cmd_bundle,
         'remoteio':  cmd_remoteio,
+        'list':      cmd_list,
     }
 
     try:
