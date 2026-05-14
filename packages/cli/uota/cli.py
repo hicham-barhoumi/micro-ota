@@ -816,10 +816,10 @@ def _ota_push_all(cfg, args, patterns, excludes, wipe=False):
                 print('ERROR: {}'.format(e), file=sys.stderr)
                 errors.append((ip, e))
 
-        for name, addr in ble_targets:
+        for name, ble_dev in ble_targets:
             print('\n[BLE {}]'.format(name))
             from .transports.ble import BLETransport
-            t = BLETransport(addr)
+            t = BLETransport(name=name, device=ble_dev)
             try:
                 send_stream_ota(t, files, manifest, key=key, wipe=wipe, password=password)
             except Exception as e:
@@ -1012,7 +1012,7 @@ _OTA_SERVICE_UUID = '756f7461-b5a3-f393-e0a9-e50e24dcca9e'
 
 
 def _ble_scan(scan_timeout):
-    """Discover micro-ota devices by OTA service UUID. Returns list of (name, address)."""
+    """Discover micro-ota devices by OTA service UUID. Returns list of (name, BLEDevice)."""
     import asyncio
     try:
         from bleak import BleakScanner
@@ -1027,7 +1027,7 @@ def _ble_scan(scan_timeout):
         async with BleakScanner(service_uuids=[_OTA_SERVICE_UUID]) as scanner:
             await asyncio.sleep(scan_timeout)
             for d in scanner.discovered_devices:
-                found.append((d.name or d.address, d.address))
+                found.append((d.name or d.address, d))
         return found
 
     return asyncio.run(_run())
@@ -1054,8 +1054,8 @@ def cmd_list(args, cfg):
     if transport in (None, 'ble'):
         devices = _ble_scan(timeout)
         if devices:
-            for name, addr in sorted(devices):
-                print('  BLE   {}  {}'.format(addr, name))
+            for name, ble_dev in sorted(devices, key=lambda x: x[0]):
+                print('  BLE   {}  {}'.format(ble_dev.address, name))
         else:
             print('  BLE   (none found)')
 

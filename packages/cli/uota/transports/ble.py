@@ -48,9 +48,10 @@ class BLETransport:
     read_exact/write/write_line, plus context-manager support.
     """
 
-    def __init__(self, name='micro-ota', timeout=10):
+    def __init__(self, name='micro-ota', timeout=10, device=None):
         _require_bleak()
         self._name    = name
+        self._device  = device  # pre-discovered BLEDevice — skips re-scan
         self._timeout = timeout
         self._client  = None
         self._rx_buf  = bytearray()
@@ -164,29 +165,22 @@ class BLETransport:
 
     # ── async internals ───────────────────────────────────────────────────────
 
-    @staticmethod
-    def _is_mac(s):
-        import re
-        return bool(re.match(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', s))
-
     async def _connect(self):
         from bleak import BleakScanner, BleakClient
 
-        print('[BLE] Scanning for "%s" …' % self._name)
-        if self._is_mac(self._name):
-            device = await BleakScanner.find_device_by_address(
-                self._name, timeout=_SCAN_TIMEOUT
-            )
+        if self._device is not None:
+            device = self._device
+            print('[BLE] Connecting to "%s" (%s) …' % (self._name, device.address))
         else:
+            print('[BLE] Scanning for "%s" …' % self._name)
             device = await BleakScanner.find_device_by_name(
                 self._name, timeout=_SCAN_TIMEOUT
             )
-        if device is None:
-            raise TimeoutError(
-                'Device "%s" not found. Is it powered on and advertising?' % self._name
-            )
-
-        print('[BLE] Found %s (%s), connecting …' % (self._name, device.address))
+            if device is None:
+                raise TimeoutError(
+                    'Device "%s" not found. Is it powered on and advertising?' % self._name
+                )
+            print('[BLE] Found %s (%s), connecting …' % (self._name, device.address))
         # Retry on transient BlueZ 'br-connection-canceled' which happens when
         # the adapter hasn't finished processing a previous disconnect yet.
         last_exc = None
