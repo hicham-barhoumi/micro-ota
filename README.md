@@ -8,12 +8,10 @@ Push code to your ESP32 in seconds, roll back a crashed firmware automatically, 
 
 ## Install
 
-**From this repository** (no PyPI account needed):
+**From this repository:**
 
 ```bash
 pip install https://github.com/hicham-barhoumi/micro-ota/raw/main/releases/micro_ota-1.0.0-py3-none-any.whl
-pip install "https://github.com/hicham-barhoumi/micro-ota/raw/main/releases/micro_ota-1.0.0-py3-none-any.whl[ble]"
-pip install "https://github.com/hicham-barhoumi/micro-ota/raw/main/releases/micro_ota-1.0.0-py3-none-any.whl[all]"
 ```
 
 Or clone and install locally:
@@ -138,8 +136,9 @@ uota <command> [options]
 | `init [--dir DIR] [--force]` | Initialize project — create `config/ota.json`, `app/`, `main.py` |
 | `bootstrap [--port PORT] [--baud BAUD] [--mpy]` | First-time upload of OTA library via serial |
 | `info [--port PORT] [--baud BAUD]` | Show device info and cache mpy bytecode version |
-| `fast [--transport T]` | Push `fastOtaFiles` (app/, config/ by default) |
-| `full [--transport T] [--wipe]` | Push all managed files |
+| `fast [--transport T] [--all]` | Push `fastOtaFiles` (app/, config/ by default) |
+| `full [--transport T] [--wipe] [--all]` | Push all managed files |
+| `list [--transport T] [--timeout SEC]` | Scan for reachable devices (WiFi subnet + BLE) |
 | `terminal [--transport T]` | Interactive device shell |
 | `version [--transport T]` | Read installed version from device |
 | `flash <file.bin> [--chip CHIP] [--erase]` | Flash MicroPython firmware via esptool |
@@ -158,6 +157,7 @@ All `fast`, `full`, `version`, `terminal` commands accept:
 | `--port PORT` | `ota.json port` | TCP port |
 | `--transport wifi_tcp\|serial\|ble` | first in `ota.json transports` | Transport |
 | `--version VER` | `ota.json version` | Version string to embed |
+| `--all` | — | Scan and push to every reachable device (WiFi + BLE) |
 
 ---
 
@@ -172,7 +172,7 @@ uota full                    # compiles lib/** to .mpy, uploads .mpy files
 ```
 
 Workflow:
-1. `uota info` connects via serial RawREPL, queries `sys.implementation.mpy`, and caches the version in `.uota_cache.json`.
+1. `uota info` connects via serial RawREPL, queries `sys.implementation._mpy`, and caches the version in `.uota_cache.json`.
 2. `uota fast` / `uota full` read the cached version and compile with `mpy-cross -b <version>`.
 3. If the cache is empty or `mpy-cross` is absent, the original `.py` files are uploaded unchanged.
 
@@ -276,10 +276,6 @@ Enters the raw REPL, injects a self-contained OTA server, speaks the standard pr
 
 ### BLE (Nordic UART Service)
 
-```bash
-pip install micro-ota[ble]
-```
-
 ```json
 { "transports": ["ble"], "bleName": "micro-ota" }
 ```
@@ -288,7 +284,7 @@ pip install micro-ota[ble]
 uota fast --transport ble
 ```
 
-The device advertises as a BLE peripheral. The host scans by name, connects, and speaks the standard OTA protocol over the micro-ota GATT service (UUID prefix `756F74xx`). A separate NUS service (UUID prefix `6E4000xx`) is reserved for RemoteIO so any standard NUS terminal app (nRF UART, LightBlue) can connect simultaneously.
+The device advertises as a BLE peripheral. The host scans by the micro-ota OTA service UUID (`756F7461-…`), connects, and speaks the standard OTA protocol over the micro-ota GATT service. A separate NUS service (UUID prefix `6E4000xx`) is reserved for RemoteIO so any standard NUS terminal app (nRF UART, LightBlue) can connect simultaneously.
 
 **WiFi + BLE simultaneously** — the ESP32's single 2.4 GHz radio can run both transports at the same time only when PSRAM is present (e.g. ESP32-WROVER, Python heap > 200 KB). On standard ESP32 modules, the OTA server logs a warning and starts only the first transport listed in `transports`.
 
@@ -308,6 +304,22 @@ The device polls a manifest URL on an interval and self-updates when the version
 uota serve          # start HTTP server on port 8080
 uota bundle --zip   # or build a static bundle for any web server
 ```
+
+---
+
+## Scanning and multi-device push
+
+```bash
+uota list                          # scan WiFi (subnet) + BLE, show all devices
+uota list --transport wifi_tcp     # WiFi only
+uota list --transport ble          # BLE only (filters by OTA service UUID)
+uota list --timeout 10             # longer scan window
+
+uota fast --all                    # push to every discovered device
+uota full --all --transport ble    # full push to all BLE devices
+```
+
+`--all` scans first (same logic as `list`), builds the file bundle once, then deploys sequentially to each found device with a `[WiFi 10.x.x.x]` / `[BLE name]` header per device.
 
 ---
 
@@ -385,7 +397,7 @@ with RemoteIOClient('micropython.local') as rio:
     print(rio.call('set_led', state=True))    # 'ok'
 ```
 
-**BLE NUS** (device in BLE-only mode, `pip install micro-ota[ble]`):
+**BLE NUS** (device in BLE-only mode):
 
 ```python
 from uota.remoteio import RemoteIOBLEClient
@@ -480,7 +492,7 @@ Location: `config/ota.json` in your project (device path: `/config/ota.json`).
 | Key | Description |
 |---|---|
 | `version` | Version string embedded in the manifest after each OTA |
-| `hostname` | Device IP or `.local` hostname for WiFi OTA and RemoteIO (e.g. `micropython.local` resolves via mDNS on physical hosts) |
+| `hostname` | Device IP or `.local` hostname for WiFi OTA and RemoteIO (e.g. `micropython.local` resolves via mDNS) |
 | `port` | OTA server port (default `2018`) |
 | `remoteioPort` | RemoteIO server port (default `2019`) |
 | `ssid` / `password` | WiFi credentials (stored on device) |
@@ -499,8 +511,6 @@ Location: `config/ota.json` in your project (device path: `/config/ota.json`).
 ## Firmware flash
 
 ```bash
-pip install micro-ota[flash]
-
 # Basic (auto-detects port and chip)
 uota flash esp32-20240602-v1.23.0.bin
 
@@ -580,15 +590,6 @@ python scripts/build.py
 
 Both scripts produce the same artifacts in `dist/`. The Python script also accepts `--pip` or `--vscode` to build one at a time.
 
-Or build the extension separately:
-
-```bash
-cd packages/vscode
-npm install
-npm run compile
-npx vsce package            # produces micro-ota-1.0.0.vsix in current dir
-```
-
 ### Install
 
 ```
@@ -640,8 +641,6 @@ WIFI_HOST=192.168.1.42 python3 tests/test_all_transports.py
 SERIAL_PORT=/dev/ttyUSB1 python3 tests/test_all_transports.py
 ```
 
-The suite handles transport switching automatically (serial raw-REPL injection is always available regardless of which wireless transport the device is currently running) and resets the BlueZ adapter between BLE phases to clear stale state.
-
 ---
 
 ## Package structure (development)
@@ -683,7 +682,7 @@ micro-ota/
 │   └── vscode/             ← VS Code extension source
 │       ├── package.json
 │       ├── tsconfig.json
-│       └─  src/extension.ts
+│       └── src/extension.ts
 ├── scripts/
 │   └── build.sh / build.py ← builds pip wheel + VS Code .vsix into dist/
 └── tests/
